@@ -746,6 +746,10 @@ def run_streamlit_app():
     if selected_participant == "Antoine":
         if ALT_AVAILABLE:
             df_all = daily_invested.reset_index().rename(columns={"index": "date"})
+            # Convert to selected currency for display
+            for col in ["Antoine", "New investor", "Other investors"]:
+                df_all[col] = df_all[col] * CURRENCY_RATES[selected_currency]
+
             chart_all = (
                 alt.Chart(df_all)
                 .transform_fold(
@@ -758,7 +762,7 @@ def run_streamlit_app():
                         "date:T",
                         axis=alt.Axis(format="%b %Y", labelAngle=0, values=di_ticks),
                     ),
-                    y=alt.Y("value:Q", title="Invested (AED)"),
+                    y=alt.Y("value:Q", title=f"Invested ({selected_currency})"),
                     color=alt.Color(
                         "participant:N", legend=alt.Legend(title="Participant")
                     ),
@@ -767,9 +771,14 @@ def run_streamlit_app():
             )
             st.altair_chart(chart_all, use_container_width=True)
         else:
-            st.line_chart(
-                daily_invested[["Antoine", "New investor", "Other investors"]]
+            # Convert data for line chart
+            daily_invested_display = daily_invested[
+                ["Antoine", "New investor", "Other investors"]
+            ].copy()
+            daily_invested_display = (
+                daily_invested_display * CURRENCY_RATES[selected_currency]
             )
+            st.line_chart(daily_invested_display)
 
         # Unit price projection (Antoine only)
         st.markdown("**Unit price over time (projection)**")
@@ -848,6 +857,11 @@ def run_streamlit_app():
     # Selected participant – invested amount
     if ALT_AVAILABLE:
         df_sel = daily_invested.reset_index().rename(columns={"index": "date"})
+        # Convert to selected currency for display
+        df_sel[selected_participant] = (
+            df_sel[selected_participant] * CURRENCY_RATES[selected_currency]
+        )
+
         st.altair_chart(
             alt.Chart(df_sel)
             .mark_line()
@@ -856,13 +870,20 @@ def run_streamlit_app():
                     "date:T",
                     axis=alt.Axis(format="%b %Y", labelAngle=0, values=di_ticks),
                 ),
-                y=alt.Y(f"{selected_participant}:Q", title="Invested (AED)"),
+                y=alt.Y(
+                    f"{selected_participant}:Q", title=f"Invested ({selected_currency})"
+                ),
             )
             .properties(height=300),
             use_container_width=True,
         )
     else:
-        st.line_chart(daily_invested[[selected_participant]])
+        # Convert data for line chart
+        daily_invested_display = daily_invested[[selected_participant]].copy()
+        daily_invested_display = (
+            daily_invested_display * CURRENCY_RATES[selected_currency]
+        )
+        st.line_chart(daily_invested_display)
 
     # Share of total (scaled ticks)
     share_series = (
