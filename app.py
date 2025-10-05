@@ -295,27 +295,27 @@ def login_page():
             )
         st.divider()
 
-        # Show demo investor credentials from secrets
-        with st.expander("Demo Investor Credentials", expanded=False):
-            try:
-                users = st.secrets["authentication"]["users"]
-                defaults = st.secrets["investor_defaults"]
+        # # Show demo investor credentials from secrets
+        # with st.expander("Demo Investor Credentials", expanded=False):
+        #     try:
+        #         users = st.secrets["authentication"]["users"]
+        #         defaults = st.secrets["investor_defaults"]
 
-                for user in users:
-                    email = user["email"]
-                    password = user["password"]
-                    role = user["role"]
+        #         for user in users:
+        #             email = user["email"]
+        #             password = user["password"]
+        #             role = user["role"]
 
-                    if role == "admin":
-                        st.markdown("**Admin:**")
-                        st.code(f"Email: {email}\nPassword: {password}")
-                    else:
-                        # Get default contribution for this investor
-                        default_amount = defaults.get(email, {}).get("2025-09-30", 0)
-                        st.markdown(f"**{email} ({default_amount}k EUR default):**")
-                        st.code(f"Email: {email}\nPassword: {password}")
-            except KeyError:
-                st.info("Demo credentials not configured in secrets")
+        #             if role == "admin":
+        #                 st.markdown("**Admin:**")
+        #                 st.code(f"Email: {email}\nPassword: {password}")
+        #             else:
+        #                 # Get default contribution for this investor
+        #                 default_amount = defaults.get(email, {}).get("2025-09-30", 0)
+        #                 st.markdown(f"**{email} ({default_amount}k EUR default):**")
+        #                 st.code(f"Email: {email}\nPassword: {password}")
+        #     except KeyError:
+        #         st.info("Demo credentials not configured in secrets")
 
         st.markdown(
             "<div class='login-note'><b>Confidentiality notice</b>. This portal may contain confidential or privileged information and is intended only for the account holder.</div>",
