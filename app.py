@@ -329,7 +329,7 @@ def login_page():
             st.markdown(
                 '<div style="height: 68px;"></div>', unsafe_allow_html=True
             )  # tweak 20–40px
-            st.image("background.png", use_container_width=True)
+            st.image("./background.png", use_container_width=True)
         except Exception:
             st.info("Add assets/background.png to show an image on the right.")
             st.caption(" ")
