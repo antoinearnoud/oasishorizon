@@ -322,9 +322,6 @@ def login_page():
             unsafe_allow_html=True,
         )
         st.markdown("</div>", unsafe_allow_html=True)
-        import os
-
-        st.write(os.listdir("."))
 
     with right:
         try:
