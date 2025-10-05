@@ -148,25 +148,50 @@ def inject_css():
 .sidebar-footer a { text-decoration: none; color: #374151; font-weight: 600; }
 .sidebar-footer span { font-size: 16px; margin-right: 6px; }
 
-/* Sidebar styling - ensure visibility with proper width */
+/* Sidebar styling - responsive and collapsible */
 [data-testid="stSidebar"] { 
-  visibility: visible !important; 
-  display: block !important;
-  transform: translateX(0) !important;
-  opacity: 1 !important;
   width: 250px !important;
   min-width: 250px !important;
   max-width: 250px !important;
 }
+
 /* Ensure sidebar content has proper width */
 [data-testid="stSidebar"] > div {
   width: 250px !important;
   min-width: 250px !important;
 }
-/* Ensure collapse control is visible */
+
+/* Mobile responsive sidebar */
+@media (max-width: 768px) {
+  [data-testid="stSidebar"] {
+    width: 280px !important;
+    min-width: 280px !important;
+    max-width: 280px !important;
+  }
+  
+  [data-testid="stSidebar"] > div {
+    width: 280px !important;
+    min-width: 280px !important;
+  }
+  
+  /* Allow sidebar to be hidden on mobile */
+  [data-testid="stSidebar"][aria-expanded="false"] {
+    transform: translateX(-100%) !important;
+    visibility: hidden !important;
+  }
+  
+  /* Show sidebar when expanded */
+  [data-testid="stSidebar"][aria-expanded="true"] {
+    transform: translateX(0) !important;
+    visibility: visible !important;
+  }
+}
+
+/* Ensure collapse control is always visible and functional */
 [data-testid="collapsedControl"] { 
   display: block !important; 
   visibility: visible !important;
+  z-index: 999 !important;
 }
 
 /* Cards: white on grey page */
