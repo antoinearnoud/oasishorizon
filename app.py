@@ -4,6 +4,30 @@ from datetime import datetime, date
 import streamlit as st
 import pandas as pd
 
+from pathlib import Path
+import streamlit as st
+
+APP_DIR = Path(__file__).parent
+img_path = APP_DIR / "background.png"
+
+# Minimal diagnostics to prove the file exists in the deployed container
+st.write(
+    {
+        "cwd": str(Path.cwd()),
+        "__file__": __file__,
+        "img_exists": img_path.exists(),
+        "app_dir_files": [p.name for p in APP_DIR.iterdir()],
+    }
+)
+
+if img_path.exists():
+    st.image(str(img_path), use_container_width=True)
+else:
+    st.error(
+        f"Could not find {img_path}. Check filename case, folder, and deployment branch."
+    )
+
+
 st.set_page_config(
     page_title="Oasis Horizon - Investor Portal",
     page_icon="",  # "💼",
