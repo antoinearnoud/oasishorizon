@@ -329,45 +329,44 @@ def login_page():
             '<div style="height: 68px;"></div>', unsafe_allow_html=True
         )  # tweak 20–40px
 
-        # Try multiple approaches for loading the image
-        image_loaded = False
-
-        # Method 1: Try static file serving (recommended for Streamlit Cloud)
+        # Try to load image with base64 encoding (most reliable for Streamlit Cloud)
         try:
-            st.image("static/background.png", use_container_width=True)
-            image_loaded = True
+            import base64
+            import os
+
+            # Try to read the image file and encode it
+            image_paths = [
+                "background.png",
+                "static/background.png",
+                "assets/background.png",
+            ]
+            image_data = None
+
+            for path in image_paths:
+                if os.path.exists(path):
+                    with open(path, "rb") as f:
+                        image_data = f.read()
+                        break
+
+            if image_data:
+                # Encode image to base64
+                encoded_image = base64.b64encode(image_data).decode()
+
+                # Display image using base64
+                st.markdown(
+                    f"""
+                    <div style="text-align: center;">
+                        <img src="data:image/png;base64,{encoded_image}" 
+                             style="max-width: 100%; height: auto; border-radius: 8px;" />
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                raise Exception("Image file not found")
+
         except Exception:
-            pass
-
-        # Method 2: Try direct path
-        if not image_loaded:
-            try:
-                st.image("background.png", use_container_width=True)
-                image_loaded = True
-            except Exception:
-                pass
-
-        # Method 3: Try with explicit path
-        if not image_loaded:
-            try:
-                st.image("./background.png", use_container_width=True)
-                image_loaded = True
-            except Exception:
-                pass
-
-        # Method 4: Try with PIL Image
-        if not image_loaded:
-            try:
-                from PIL import Image
-
-                image = Image.open("background.png")
-                st.image(image, use_container_width=True)
-                image_loaded = True
-            except Exception:
-                pass
-
-        # Fallback if all methods fail
-        if not image_loaded:
+            # Fallback: Create a beautiful placeholder with app branding
             st.markdown(
                 """
             <div style="
@@ -377,12 +376,18 @@ def login_page():
                 text-align: center;
                 color: white;
                 margin: 20px 0;
+                box-shadow: 0 4px 12px rgba(15, 118, 110, 0.2);
             ">
-                <h2 style="color: white; margin: 0 0 10px 0;">🏢</h2>
-                <h3 style="color: white; margin: 0 0 8px 0;">Oasis Horizon</h3>
-                <p style="color: rgba(255,255,255,0.9); margin: 0; font-size: 14px;">
+                <h2 style="color: white; margin: 0 0 10px 0; font-size: 2.5rem;">🏢</h2>
+                <h3 style="color: white; margin: 0 0 8px 0; font-size: 1.5rem; font-weight: 700;">Oasis Horizon</h3>
+                <p style="color: rgba(255,255,255,0.9); margin: 0; font-size: 16px; font-weight: 500;">
                     Real Estate Investment Platform
                 </p>
+                <div style="margin-top: 20px; padding: 12px; background: rgba(255,255,255,0.1); border-radius: 8px;">
+                    <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 14px;">
+                        Premium Property Investment Opportunities
+                    </p>
+                </div>
             </div>
             """,
                 unsafe_allow_html=True,
