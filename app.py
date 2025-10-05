@@ -328,46 +328,48 @@ def login_page():
         st.markdown(
             '<div style="height: 68px;"></div>', unsafe_allow_html=True
         )  # tweak 20–40px
-        
+
         # Try multiple approaches for loading the image
         image_loaded = False
-        
+
         # Method 1: Try static file serving (recommended for Streamlit Cloud)
         try:
-            st.image('static/background.png', use_container_width=True)
+            st.image("static/background.png", use_container_width=True)
             image_loaded = True
         except Exception:
             pass
-        
+
         # Method 2: Try direct path
         if not image_loaded:
             try:
-                st.image('background.png', use_container_width=True)
+                st.image("background.png", use_container_width=True)
                 image_loaded = True
             except Exception:
                 pass
-        
+
         # Method 3: Try with explicit path
         if not image_loaded:
             try:
-                st.image('./background.png', use_container_width=True)
+                st.image("./background.png", use_container_width=True)
                 image_loaded = True
             except Exception:
                 pass
-        
+
         # Method 4: Try with PIL Image
         if not image_loaded:
             try:
                 from PIL import Image
-                image = Image.open('background.png')
+
+                image = Image.open("background.png")
                 st.image(image, use_container_width=True)
                 image_loaded = True
             except Exception:
                 pass
-        
+
         # Fallback if all methods fail
         if not image_loaded:
-            st.markdown("""
+            st.markdown(
+                """
             <div style="
                 background: linear-gradient(135deg, #0F766E 0%, #0c5f58 100%);
                 border-radius: 12px;
@@ -382,7 +384,9 @@ def login_page():
                     Real Estate Investment Platform
                 </p>
             </div>
-            """, unsafe_allow_html=True)
+            """,
+                unsafe_allow_html=True,
+            )
 
 
 # --- Helper Functions ---
