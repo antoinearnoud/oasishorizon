@@ -322,11 +322,11 @@ def login_page():
             unsafe_allow_html=True,
         )
         st.markdown("</div>", unsafe_allow_html=True)
-
-    with right:
         import os
 
         st.write(os.listdir("."))
+
+    with right:
         try:
             # spacer to align top of image with "Welcome..." header
             st.markdown(
