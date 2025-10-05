@@ -1,1248 +1,964 @@
-# app.py
-# Arthouse Co-Investment (Streamlit)
-# ---------------------------------------------------------------------------------------
-# Public default = "New investor" view.
-# Admin-only views ("Antoine" and "Other investors") unlocked via sidebar Admin mode + password.
-#
-# Admin password:
-#   - default: "changeme"
-#   - override by setting env var: ARTHOUSE_ADMIN_PW
-#
-# Core economics (unchanged from your last version):
-# - SALE case: Others get max(appreciation-based, 15% p.a. guarantee); Antoine gets residual of project appreciation.
-# - EXIT case: If date ≤ 2028-09-30 -> 15% p.a. for Others; if date > 2028-09-30 -> 20% p.a. for Others; Antoine gets residual.
-# - New investor gets horizontal editable table; Antoine/Others view shows vertical inline editor.
-# - Sanity checks hidden when viewing New investor.
-
 from __future__ import annotations
 import os
-import sys
-from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from datetime import datetime, date
+import streamlit as st
 import pandas as pd
-import numpy as np
-from datetime import datetime, date, timedelta
-import pytz
 
-STREAMLIT_AVAILABLE = True
+st.set_page_config(
+    page_title="Oasis Horizon - Investor Portal",
+    page_icon="",  # "💼",
+    layout="wide",
+    initial_sidebar_state="expanded",  # "auto", "expanded"
+)
+
+
+def show_fatal(msg: str, exc: Exception | None = None):
+    st.error(msg)
+    if exc:
+        st.exception(exc)
+
+
+# --- Domain logic ---
 try:
-    import streamlit as st
-except Exception:
-    STREAMLIT_AVAILABLE = False
-
-ALT_AVAILABLE = True
-try:
-    import altair as alt
-except Exception:
-    ALT_AVAILABLE = False
-
-# -------------------- Constants & Defaults --------------------
-AED = "AED"
-EUR = "EUR"
-USD = "USD"
-ACQ_DATE: date = date(2024, 9, 30)
-ACQ_PRICE: float = 11_800_000.0
-TARGET_DATE: date = date(2028, 5, 30)
-TARGET_PRICE: float = 17_500_000.0
-AED_PER_USD: float = 3.6727
-AED_PER_EUR: float = 4.31371
-
-# Currency conversion rates (all relative to AED)
-CURRENCY_RATES = {
-    AED: 1.0,
-    USD: 1.0 / AED_PER_USD,
-    EUR: 1.0 / AED_PER_EUR,
-}
-
-INVESTMENT_DATES: List[date] = [
-    date(2024, 9, 30),
-    date(2025, 1, 31),
-    date(2025, 9, 30),
-    date(2026, 5, 30),  # default scenario date (4th)
-    date(2027, 1, 30),
-    date(2027, 9, 30),
-    date(2028, 5, 30),
-    date(2028, 9, 30),  # Added for scenario sell options
-]
-
-EDITABLE_START: date = date(2025, 9, 30)
-
-ALDAR_PLAN: Dict[date, float] = {
-    date(2024, 9, 30): 1_188_000.0,
-    date(2025, 1, 31): 1_188_000.0,
-    date(2025, 9, 30): 1_188_000.0,
-    date(2026, 5, 30): 1_782_000.0,  # special
-    date(2027, 1, 30): 1_188_000.0,
-    date(2027, 9, 30): 1_188_000.0,
-    date(2028, 5, 30): 4_158_000.0,  # special
-}
-
-DEFAULT_ANTOINE: Dict[date, float] = {
-    date(2024, 9, 30): 1_188_000.0,
-    date(2025, 1, 31): 1_188_000.0,
-}
-
-DUBAI_TZ = pytz.timezone("Asia/Dubai")
-TODAY = datetime.now(DUBAI_TZ).date()
-
-# EXIT rule
-EXIT_RATE_CUTOFF = date(2028, 9, 30)  # when > cutoff => 20% p.a., else 15% p.a.
-
-# Admin password
-ADMIN_PASSWORD = os.environ.get("ARTHOUSE_ADMIN_PW", "changeme")
-
-
-# -------------------- Helpers --------------------
-def convert_currency(amount_aed: float, target_currency: str) -> float:
-    """Convert AED amount to target currency."""
-    return amount_aed * CURRENCY_RATES[target_currency]
-
-
-def fmt_currency(x: float, currency: str) -> str:
-    """Format amount in the specified currency."""
-    try:
-        converted = convert_currency(x, currency)
-        if currency == USD:
-            return f"${converted:,.0f}"
-        elif currency == EUR:
-            return f"€{converted:,.0f}"
-        else:  # AED
-            return f"{converted:,.0f} {AED}"
-    except Exception:
-        return f"{x} {currency}"
-
-
-def fmt_aed(x: float) -> str:
-    try:
-        return f"{x:,.0f} {AED}"
-    except Exception:
-        return f"{x} {AED}"
-
-
-def fmt_usd(x: float) -> str:
-    try:
-        return f"${x:,.0f}"
-    except Exception:
-        return f"${x}"
-
-
-def fmt_aed_compact(x: float) -> str:
-    if x >= 1_000_000:
-        return f"≈ AED {x/1_000_000:.1f}m"
-    if x >= 1_000:
-        return f"≈ AED {x/1_000:.1f}k"
-    return f"≈ AED {x:,.0f}"
-
-
-def fmt_date(d: date) -> str:
-    return pd.Timestamp(d).strftime("%d %b %Y")
-
-
-def make_daily_index(start: date, end: date) -> pd.DatetimeIndex:
-    return pd.date_range(start=start, end=end, freq="D")
-
-
-def base_contrib_df(investment_dates: List[date]) -> pd.DataFrame:
-    df = pd.DataFrame(index=pd.to_datetime(investment_dates))
-    df.index.name = "date"
-    for col in ["Antoine", "New investor", "Total plan"]:
-        df[col] = 0.0
-    return df
-
-
-def default_total_plan_from(df_contrib: pd.DataFrame) -> pd.Series:
-    return (df_contrib["Antoine"] + df_contrib["New investor"]).astype(float)
-
-
-def linear_price_series(
-    acq_date: date, acq_price: float, target_date: date, target_price: float
-) -> pd.Series:
-    idx = make_daily_index(acq_date, target_date)
-    n = len(idx) - 1
-    if n <= 0:
-        s = pd.Series([float(acq_price)], index=pd.to_datetime([acq_date]))
-        s.name = "price"
-        return s
-    step = (target_price - acq_price) / n
-    values = [acq_price + i * step for i in range(n + 1)]
-    s = pd.Series(values, index=idx)
-    s.name = "price"
-    return s
-
-
-def parse_price_csv(file) -> pd.Series:
-    df = pd.read_csv(file)
-    cols = {c.lower() for c in df.columns}
-    if not {"date", "price"}.issubset(cols):
-        raise ValueError("CSV must have 'date' and 'price' columns")
-    df.columns = [c.lower() for c in df.columns]
-    s = pd.Series(df["price"].values, index=pd.to_datetime(df["date"])).sort_index()
-    s.name = "price"
-    return s
-
-
-def build_daily_invested(
-    contrib_df: pd.DataFrame, acq_date: date, end_date: date
-) -> pd.DataFrame:
-    df = contrib_df.copy()
-    residual = (df["Total plan"] - df["Antoine"] - df["New investor"]).clip(lower=0.0)
-    df["Other investors"] = residual
-    idx_daily = make_daily_index(acq_date, end_date)
-    daily = pd.DataFrame(index=idx_daily)
-    for col in ["Antoine", "New investor", "Other investors"]:
-        series = df[col].reindex(daily.index, method=None).fillna(0.0)
-        daily[col] = series.cumsum()
-    daily["Total"] = daily[["Antoine", "New investor", "Other investors"]].sum(axis=1)
-    return daily
-
-
-@dataclass
-class GainBreakdown:
-    appreciation: float
-    guarantee: float
-    final: float
-
-
-def gains_at_date(
-    when: date,
-    acq_date: date,
-    acq_price: float,
-    price_series: pd.Series,
-    daily_invested: pd.DataFrame,
-) -> Dict[str, GainBreakdown]:
-    """SALE case: Others get max(app, 15%); Antoine gets residual of project appreciation (no guarantee)."""
-    start = acq_date + timedelta(days=1)
-    if when <= acq_date:
-        zero = GainBreakdown(0.0, 0.0, 0.0)
-        return {"Antoine": zero, "New investor": zero, "Other investors": zero}
-
-    idx = make_daily_index(start, when)
-
-    ps = price_series.copy().sort_index()
-    if pd.Timestamp(when) not in ps.index:
-        full_idx = pd.DatetimeIndex(
-            sorted(
-                set(ps.index.tolist() + [pd.Timestamp(when), pd.Timestamp(acq_date)])
-            )
-        )
-        ps = ps.reindex(full_idx).interpolate(method="time").ffill().bfill()
-    price_t = float(ps.loc[pd.Timestamp(when)])
-
-    total_days = (when - acq_date).days
-    total_appreciation = max(price_t - acq_price, 0.0)
-    daily_appreciation = (total_appreciation / total_days) if total_days > 0 else 0.0
-
-    inv = daily_invested.reindex(idx).ffill().fillna(0.0)
-    total_invested = inv["Total"].replace(0.0, np.nan)
-
-    shares = pd.DataFrame(index=idx)
-    for col in ["Antoine", "New investor", "Other investors"]:
-        shares[col] = inv[col] / total_invested
-    shares = shares.fillna(0.0)
-
-    appreciation = shares.sum(axis=0) * daily_appreciation
-    rate_daily_15 = 0.15 / 365.0
-    guarantee_raw = (
-        inv[["Antoine", "New investor", "Other investors"]].sum(axis=0) * rate_daily_15
+    from engine import (
+        AED,
+        EUR,
+        USD,
+        ACQ_DATE,
+        ACQ_PRICE,
+        TARGET_DATE,
+        TARGET_PRICE,
+        INVESTMENT_DATES,
+        EDITABLE_START,
+        ALDAR_PLAN,
+        DEFAULT_ANTOINE,
+        CURRENCY_RATES,
+        linear_price_series,
+        base_contrib_df,
+        build_daily_invested,
+        gains_at_date,
+        exit_gains_at_date,
+        per_part_guarantee,
     )
-
-    out: Dict[str, GainBreakdown] = {}
-    # Others: max(app, 15%)
-    others = ["New investor", "Other investors"]
-    others_payout_sum = 0.0
-    for col in others:
-        app = float(appreciation[col])
-        gte = float(guarantee_raw[col])
-        final = max(app, gte)
-        others_payout_sum += final
-        out[col] = GainBreakdown(appreciation=app, guarantee=gte, final=final)
-
-    # Antoine: residual of total appreciation
-    ant_app = float(appreciation["Antoine"])
-    ant_final = total_appreciation - others_payout_sum
-    out["Antoine"] = GainBreakdown(appreciation=ant_app, guarantee=0.0, final=ant_final)
-    return out
-
-
-def per_part_guarantee(
-    when: date,
-    acq_date: date,
-    daily_invested: pd.DataFrame,
-    rate_annual: float,
-) -> Dict[str, float]:
-    """Time-weighted guarantee per participant at a single annual rate."""
-    start = acq_date + timedelta(days=1)
-    if when <= acq_date:
-        return {"Antoine": 0.0, "New investor": 0.0, "Other investors": 0.0}
-    idx = make_daily_index(start, when)
-    inv = daily_invested.reindex(idx).ffill().fillna(0.0)
-    rate_daily = rate_annual / 365.0
-    g = inv[["Antoine", "New investor", "Other investors"]].sum(axis=0) * rate_daily
-    return {k: float(v) for k, v in g.to_dict().items()}
-
-
-def exit_gains_at_date(
-    when: date,
-    acq_date: date,
-    acq_price: float,
-    price_series: pd.Series,
-    daily_invested: pd.DataFrame,
-) -> Tuple[Dict[str, float], float]:
-    """EXIT: Others guarantee at 15% p.a. if when ≤ cutoff else 20% p.a.; Antoine = residual of project appreciation."""
-    ps = price_series.copy().sort_index()
-    if pd.Timestamp(when) not in ps.index:
-        full_idx = pd.DatetimeIndex(
-            sorted(
-                set(ps.index.tolist() + [pd.Timestamp(when), pd.Timestamp(acq_date)])
-            )
-        )
-        ps = ps.reindex(full_idx).interpolate(method="time").ffill().bfill()
-    price_t = float(ps.loc[pd.Timestamp(when)])
-    total_appreciation = max(price_t - acq_price, 0.0)
-
-    rate_annual = 0.20 if when >= EXIT_RATE_CUTOFF else 0.15
-    g = per_part_guarantee(when, acq_date, daily_invested, rate_annual=rate_annual)
-    others_sum = g["New investor"] + g["Other investors"]
-    ant_residual = total_appreciation - others_sum
-
-    return (
-        {
-            "Antoine": ant_residual,
-            "New investor": g["New investor"],
-            "Other investors": g["Other investors"],
-        },
-        rate_annual,
+except Exception as e:
+    show_fatal(
+        "Could not import engine.py. Make sure engine.py is in the same folder as app.py.",
+        e,
     )
+    st.stop()
+
+# Authentication and investor defaults are now loaded from Streamlit secrets
+# See .streamlit/secrets.toml for configuration
 
 
-# -------------------- Login System --------------------
-def login_page():
-    st.set_page_config(
-        page_title="🌴 Arthouse Co-Investment", page_icon="🏗️", layout="wide"
+# --- CSS ---
+def inject_css():
+    # Inject JavaScript to force sidebar visibility
+    st.markdown(
+        """
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Force sidebar to be visible with proper width
+        const sidebar = document.querySelector('[data-testid="stSidebar"]');
+        if (sidebar) {
+            sidebar.style.display = 'block';
+            sidebar.style.visibility = 'visible';
+            sidebar.style.transform = 'translateX(0)';
+            sidebar.style.opacity = '1';
+            sidebar.style.width = '250px';
+            sidebar.style.minWidth = '250px';
+            sidebar.style.maxWidth = '250px';
+        }
+        
+        // Show the collapse control
+        const collapseControl = document.querySelector('[data-testid="collapsedControl"]');
+        if (collapseControl) {
+            collapseControl.style.display = 'block';
+            collapseControl.style.visibility = 'visible';
+        }
+        
+        // Also try alternative selectors
+        const sidebarAlt = document.querySelector('.stSidebar');
+        if (sidebarAlt) {
+            sidebarAlt.style.display = 'block';
+            sidebarAlt.style.visibility = 'visible';
+            sidebarAlt.style.transform = 'translateX(0)';
+            sidebarAlt.style.width = '250px';
+            sidebarAlt.style.minWidth = '250px';
+            sidebarAlt.style.maxWidth = '250px';
+        }
+    });
+    </script>
+    """,
+        unsafe_allow_html=True,
     )
-
-    # Initialize admin login state
-    if "show_admin_login" not in st.session_state:
-        st.session_state.show_admin_login = False
-
-    # Header with discrete admin button
-    col_title, col_admin = st.columns([4, 1])
-    with col_title:
-        st.title("🌴 Arthouse Co-Investment")
-    with col_admin:
-        if st.button("⚙️", help="Admin access", key="admin_access_btn"):
-            st.session_state.show_admin_login = True
-
-    st.header("Welcome! Please log in to continue")
 
     st.markdown(
         """
-    This application helps you track and analyze your real estate co-investment in the Arthouse project.
-    
-    """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+
+/* Base */
+.stApp { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#f5f6f8; }
+#MainMenu, footer, header { visibility: hidden; }
+
+/* Login layout */
+.login-left { padding: 40px 32px; max-width: 440px; margin-left: 0; margin-right: auto; }
+.login-note { font-size: 12px; color: #475569; line-height: 1.45; }
+
+/* Inputs */
+.stTextInput input, .stPassword > div > div > input {
+  height: 44px; border-radius: 10px; border: 1px solid #e5e7eb;
+}
+
+/* Buttons */
+.stButton > button {
+  background:#0F766E; color:#fff; border:none; border-radius:10px; font-weight:700;
+  padding:.7rem 1.2rem; box-shadow:0 1px 2px rgba(0,0,0,.06); transition:background .15s, box-shadow .15s, transform .02s;
+}
+.stButton > button:hover { background:#0c5f58; color:#fff; box-shadow:0 4px 10px rgba(0,0,0,.08); }
+.stButton > button:active { transform:translateY(1px); background:#0b5852; color:#fff; }
+
+/* App bar title */
+.brand { font-weight:800; font-size:20px; color:#0f172a; }
+
+/* ---- Sidebar NAV (top) ---- */
+.sb-nav-title {
+  font-size:12px; font-weight:800; color:#6b7280; letter-spacing:.4px; text-transform:uppercase;
+  margin:10px 14px 6px 14px;
+}
+.sb-wrap { position: relative; margin: 0 10px 12px 14px; }
+.sb-rail {
+  position:absolute; left:-8px; top:6px; bottom:6px; width:4px; background:#0F766E; border-radius:4px;
+}
+.sb-nav { background:transparent; padding:0; margin:0; }
+.sb-item {
+  display:flex; align-items:center; gap:10px;
+  padding:10px 12px; border-radius:10px; font-weight:800; color:#1f2937; text-decoration:none;
+  border:1px solid transparent; user-select:none;
+}
+.sb-item:hover { background:#eef2ff; }
+.sb-item .ic { width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; color:#4f46e5; }
+.sb-item.active { background:#eef2ff; color:#1e293b; border:1px solid #e5e7eb; }
+
+/* Sidebar contact us footer */
+.sidebar-footer {
+  position: fixed; bottom: 20px; left: 10px; width: 250px; font-size: 14px; color: #374151;
+}
+.sidebar-footer a { text-decoration: none; color: #374151; font-weight: 600; }
+.sidebar-footer span { font-size: 16px; margin-right: 6px; }
+
+/* Sidebar styling - ensure visibility with proper width */
+[data-testid="stSidebar"] { 
+  visibility: visible !important; 
+  display: block !important;
+  transform: translateX(0) !important;
+  opacity: 1 !important;
+  width: 250px !important;
+  min-width: 250px !important;
+  max-width: 250px !important;
+}
+/* Ensure sidebar content has proper width */
+[data-testid="stSidebar"] > div {
+  width: 250px !important;
+  min-width: 250px !important;
+}
+/* Ensure collapse control is visible */
+[data-testid="collapsedControl"] { 
+  display: block !important; 
+  visibility: visible !important;
+}
+
+/* Cards: white on grey page */
+.stat-card {
+  background:#ffffff; border:1px solid #e5e7eb; border-radius:14px;
+  box-shadow:0 1px 2px rgba(16,24,40,.04); padding:16px 18px;
+}
+.stat-card .card-head {
+  font-size:12px; color:#6b7280; font-weight:800; letter-spacing:.5px; text-transform:uppercase; margin-bottom:8px;
+}
+.stat-card hr { border:none; border-top:1px solid #f0f2f5; margin:12px -18px 12px; }
+.stat-card .card-value { font-size:24px; font-weight:800; color:#111827; margin:2px 0 4px; }
+.stat-card .card-sub { font-size:13px; color:#6b7280; font-weight:600; }
+
+/* Larger variant for Performance */
+.stat-card.lg .card-value { font-size:32px; }
+.stat-card.lg .card-head { font-size:13px; }
+
+/* Scenario selector card */
+.scenario-card { background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:12px 16px; margin-bottom:8px; }
+.scenario-title { font-size:13px; font-weight:800; color:#374151; margin-bottom:8px; }
+
+/* Login right image alignment */
+.login-hero {
+  margin-top: 22px;          /* tweak this value if you want tighter/looser alignment */
+}
+@media (max-width: 900px) {
+  .login-hero { margin-top: 28px; }
+}
+
+</style>
+""",
+        unsafe_allow_html=True,
     )
-    st.markdown("**Enter your email address to login or continue as New Investors**")
-    # Create columns to left-align the form elements
-    col1, col2 = st.columns([1, 3.5])
 
-    with col1:
 
-        email = st.text_input(
-            "Email", placeholder="your.email@example.com", key="login_email"
-        )
-
-        new_investor_button = st.button(
-            "🆕 Continue as New Investor",
-            help="Explore the platform without registration",
-        )
-
-    # Handle login attempts
-    login_attempted = False
-
-    # Check if email was entered and user pressed Enter or clicked elsewhere
-    if email and email.strip():
-        login_attempted = True
-        # For now, all emails show "not registered" message
-        st.error(
-            "📧 Email not registered - please contact admin or explore as New Investor"
-        )
-
-        # Handle New Investor button
-    if new_investor_button:
-        st.session_state.role = "New Investor"
-        st.session_state.admin_authed = False
-        st.rerun()
-
-    # Admin login form (appears when admin button is clicked)
-    if st.session_state.get("show_admin_login", False):
-        st.markdown("---")
-        col1, col2 = st.columns([1, 3.5])
-        with col1:
-            st.markdown("**🔐 Admin Login**")
-            admin_password = st.text_input(
-                "Password",
-                type="password",
-                key="admin_login_password",
-                placeholder="Enter admin password",
+# --- UI helpers ---
+def appbar():
+    with st.container():
+        c1, csp, c2 = st.columns([2, 6, 4])
+        with c1:
+            st.markdown(
+                '<div class="brand">Oasis Horizon Fund</div>', unsafe_allow_html=True
             )
-
-            col_login, col_cancel = st.columns([1, 1])
-            with col_login:
-                if st.button("Login"):
-                    if admin_password == ADMIN_PASSWORD:
-                        st.session_state.role = "Admin"
-                        st.session_state.admin_authed = True
-                        st.session_state.show_admin_login = False
-                        st.rerun()
-                    else:
-                        st.error("Incorrect password")
-
-            with col_cancel:
-                if st.button("Cancel"):
-                    st.session_state.show_admin_login = False
+            st.caption("Investor Portal")
+        with c2:
+            cols = st.columns([1.2, 1, 1])
+            with cols[0]:
+                st.selectbox(
+                    "Currency",
+                    options=[EUR, USD, AED],
+                    index=0,
+                    key="currency",
+                    label_visibility="collapsed",
+                    help="Values shown in your selected currency. Base is AED.",
+                )
+            with cols[1]:
+                st.button("Profile", use_container_width=True, disabled=True)
+            with cols[2]:
+                if st.button("Log out", use_container_width=True):
+                    st.session_state.clear()
                     st.rerun()
 
 
-def logout():
-    st.session_state.role = None
-    st.session_state.admin_authed = False
-    st.rerun()
-
-
-# -------------------- Main App --------------------
-def main_app():
-    st.set_page_config(
-        page_title="🌴 Arthouse Co-Investment", page_icon="🏗️", layout="wide"
+def sidebar_nav():
+    st.sidebar.markdown(
+        '<div class="sb-nav-title">INVESTOR PORTAL</div>', unsafe_allow_html=True
     )
-
-    # ---- Header with title, currency selector, and logout ----
-    col1, col2, col3 = st.columns([2.5, 0.5, 1])
-    with col1:
-        st.title("🌴 Arthouse Co-Investment")
-    with col2:
-        selected_currency = st.selectbox(
-            "Currency",
-            [EUR, USD, AED],
-            index=0,
-            help="All calculations are done in AED and converted for display",
-            key="currency_selector",
-            label_visibility="collapsed",
-        )
-        st.session_state.selected_currency = selected_currency
-    with col3:
-
-        if st.button("🚪 Log out"):
-            logout()
-
-    # ---- Sidebar Configuration ----
-    st.sidebar.title("⚙️ Configuration")
-
-    # Determine user permissions
-    is_admin = st.session_state.role == "Admin" and st.session_state.get(
-        "admin_authed", False
-    )
-
-    # Show role info in sidebar
-    st.sidebar.markdown("---")
-    # st.sidebar.markdown(f"**Current Role:** {st.session_state.role}")
-    # if is_admin:
-    #     st.sidebar.success("Admin access granted")
-
-
-# -------------------- Streamlit UI --------------------
-def run_streamlit_app():
-    # Initialize session state
-    if "role" not in st.session_state:
-        st.session_state.role = None
-    if "admin_authed" not in st.session_state:
-        st.session_state.admin_authed = False
-
-    # Show login page or main app
-    if st.session_state.role is None:
-        login_page()
-        return
-
-    # Main app logic
-    main_app()
-
-    # Get currency from sidebar (set in main_app)
-    selected_currency = st.session_state.get("selected_currency", EUR)
-    if "selected_currency" not in st.session_state:
-        # Set default if not in session state yet
-        selected_currency = EUR
-        st.session_state.selected_currency = selected_currency
-
-    # Update selected_currency from sidebar
-    try:
-        # This will be set by the sidebar selectbox in main_app
-        selected_currency = st.session_state.selected_currency
-    except:
-        selected_currency = EUR
-
-    # Determine user permissions and participant
-    is_admin = st.session_state.role == "Admin" and st.session_state.get(
-        "admin_authed", False
-    )
-
-    if st.session_state.role == "New Investor":
-        selected_participant = "New investor"
-    else:  # Admin
-        # Admin can select participant
-        st.sidebar.markdown("---")
-        selected_participant = st.sidebar.selectbox(
-            "👤 View as",
-            ["New investor", "Antoine", "Other investors"],
-            index=0,
-            help="Select which participant's view to display",
-        )
-
-    # ---- Price series ----
-    price_series = linear_price_series(ACQ_DATE, ACQ_PRICE, TARGET_DATE, TARGET_PRICE)
-
-    # Scenario date (available in both modes)
-    default_scenario_date = INVESTMENT_DATES[3]  # 4th installment
-
-    # Create selectbox with installment dates
-    date_options = [d.strftime("%Y-%m-%d") for d in INVESTMENT_DATES]
-    default_index = INVESTMENT_DATES.index(default_scenario_date)
-
-    selected_date_str = st.sidebar.selectbox(
-        "Scenario: sell / withdraw date",
-        options=date_options[3:],
-        index=0,  # default_index,
-        help="Choose from available installment dates",
-    )
-
-    # Convert back to date object
-    sell_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
-    # st.sidebar.caption("Daily indices computed in Asia/Dubai time. Gains today use today's Dubai date.")
-
-    # ---- Blurb inputs ----
-    try:
-        price_today_blurb = float(price_series.sort_index().loc[pd.Timestamp(TODAY)])
-    except KeyError:
-        price_today_blurb = float(
-            price_series.sort_index()
-            .reindex(price_series.index.union([pd.Timestamp(TODAY)]))
-            .interpolate(method="time")
-            .loc[pd.Timestamp(TODAY)]
-        )
-    appreciation_blurb = max(price_today_blurb - ACQ_PRICE, 0.0)
-
-    # ---- Title & Intro ----
-    # st.title("🌴 Arthouse Co-Investment")
-    show_target_line = selected_participant in ("Antoine", "Other investors")
-    target_html = (
-        f'<div style="margin-top:6px; color:rgba(49,51,63,0.75);">'
-        f"Target: <strong>{fmt_currency(TARGET_PRICE, selected_currency)}</strong> on <strong>{fmt_date(TARGET_DATE)}</strong>"
-        f"</div>"
-        if show_target_line
-        else ""
-    )
-    st.markdown(
-        f"""
-<div style="border:1px solid rgba(49,51,63,0.15); border-radius:12px; padding:12px 16px; background:rgba(250,250,250,0.6); line-height:1.55;">
-  <div><strong>Investors participate in a prime Abu Dhabi property</strong> that has already appreciated by <strong>{fmt_currency(appreciation_blurb, selected_currency)}</strong> since acquisition.</div>
-  <br>
-  <div>Capital is returned first, investors receive a <strong>15% annualized preferred return</strong>, and profits above that are shared fairly on a <strong>daily pro-rata</strong> basis.</div>
-  <br>
-  <div>Liquidity is built in: investors may <strong>exit every 8 months with 15% p.a.</strong> (via contractual buy-out), or <strong>automatically at 20% p.a.</strong> if the property is not sold by <strong>30 Sep 2028</strong>.</div>
-  <br>
-  <div>Purchase: <strong>{fmt_currency(ACQ_PRICE, selected_currency)}</strong> on <strong>{fmt_date(ACQ_DATE)}</strong></div>
-  {target_html}
-</div>
-   
+    st.sidebar.markdown(
+        """
+<div class="sb-wrap">
+  <div class="sb-rail"></div>
+  <div class="sb-nav">
+    <div class="sb-item active">
+      <span class="ic">🏠</span>
+      <span>Home</span>
+    </div>
+  </div>
 </div>
 """,
         unsafe_allow_html=True,
     )
-    st.markdown("<br>", unsafe_allow_html=True)  # space before cards
 
-    metrics_box = st.container()
 
-    # -------------------- 1) Investment windows & contributions --------------------
-    st.subheader("Investment contributions")
+def fmt_currency(amount_aed: float) -> str:
+    cur = st.session_state.get("currency", EUR)
+    val = amount_aed * CURRENCY_RATES[cur]
+    symbol = "€" if cur == EUR else "$" if cur == USD else "AED "
+    return f"{symbol}{val:,.0f}"
 
-    contrib_df = base_contrib_df(INVESTMENT_DATES).copy()
-    for d, v in DEFAULT_ANTOINE.items():
-        if d in contrib_df.index.date:
-            contrib_df.loc[pd.Timestamp(d), "Antoine"] = v
-    contrib_df["Total plan"] = 0.0
-    for d in INVESTMENT_DATES:
-        contrib_df.loc[pd.Timestamp(d), "Total plan"] = ALDAR_PLAN.get(d, 0.0)
 
-    with st.expander("Edit contributions", expanded=True):
+# --- Login ---
+def login_page():
+    inject_css()
+    left, right = st.columns([5, 8])
+    with left:
+        st.markdown('<div class="login-left">', unsafe_allow_html=True)
+        st.header("Welcome to Oasis Horizon Fund")
+        st.write("Please sign in for access.")
+        email = st.text_input(
+            "Email address", placeholder="you@company.com", key="login_email"
+        )
+        pw = st.text_input(
+            "Password",
+            type="password",
+            placeholder="Enter your password",
+            key="login_pw",
+        )
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            if st.button("Sign in", use_container_width=True, key="signin"):
+                # Load users from secrets
+                USERS = get_users_from_secrets()
+
+                if email in USERS and USERS[email] == pw:
+                    st.session_state.user = email
+                    user_role = get_user_role(email)
+                    st.session_state.role = user_role
+                    st.session_state.admin_authed = user_role == "admin"
+                    st.rerun()
+                else:
+                    st.error("Invalid email or password")
+        with col_b:
+            st.button(
+                "Request investor access", use_container_width=True, disabled=True
+            )
+        st.divider()
+
+        # Show demo investor credentials from secrets
+        with st.expander("Demo Investor Credentials", expanded=False):
+            try:
+                users = st.secrets["authentication"]["users"]
+                defaults = st.secrets["investor_defaults"]
+
+                for user in users:
+                    email = user["email"]
+                    password = user["password"]
+                    role = user["role"]
+
+                    if role == "admin":
+                        st.markdown("**Admin:**")
+                        st.code(f"Email: {email}\nPassword: {password}")
+                    else:
+                        # Get default contribution for this investor
+                        default_amount = defaults.get(email, {}).get("2025-09-30", 0)
+                        st.markdown(f"**{email} ({default_amount}k EUR default):**")
+                        st.code(f"Email: {email}\nPassword: {password}")
+            except KeyError:
+                st.info("Demo credentials not configured in secrets")
+
+        st.markdown(
+            "<div class='login-note'><b>Confidentiality notice</b>. This portal may contain confidential or privileged information and is intended only for the account holder.</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with right:
+        try:
+            # spacer to align top of image with "Welcome..." header
+            st.markdown(
+                '<div style="height: 68px;"></div>', unsafe_allow_html=True
+            )  # tweak 20–40px
+            st.image("assets/background.png", use_container_width=True)
+        except Exception:
+            st.info("Add assets/background.png to show an image on the right.")
+            st.caption(" ")
+
+
+# --- Helper Functions ---
+def get_users_from_secrets():
+    """Load users from Streamlit secrets"""
+    try:
+        users = st.secrets["authentication"]["users"]
+        return {user["email"]: user["password"] for user in users}
+    except KeyError:
+        st.error("Authentication secrets not configured")
+        return {}
+
+
+def get_user_role(email):
+    """Get user role from secrets"""
+    try:
+        users = st.secrets["authentication"]["users"]
+        for user in users:
+            if user["email"] == email:
+                return user["role"]
+        return "investor"  # default
+    except KeyError:
+        return "investor"
+
+
+def get_investor_defaults_from_secrets():
+    """Load investor defaults from secrets"""
+    try:
+        return st.secrets["investor_defaults"]
+    except KeyError:
+        return {}
+
+
+def get_fixed_rates_from_secrets():
+    """Load fixed rates from secrets"""
+    try:
+        return st.secrets["fixed_rates"]
+    except KeyError:
+        return {}
+
+
+def get_currency_rate_for_date(date_str: str, currency: str) -> float:
+    """Get currency rate for a specific date, using fixed rates if available."""
+    fixed_rates = get_fixed_rates_from_secrets()
+
+    # Check if we have fixed rates for this date
+    if date_str in fixed_rates:
+        if currency == EUR:
+            return 1.0 / fixed_rates[date_str]["eur_to_aed"]  # Convert to AED->EUR rate
+        elif currency == USD:
+            return 1.0 / fixed_rates[date_str]["usd_to_aed"]  # Convert to AED->USD rate
+        else:  # AED
+            return 1.0
+
+    # Fall back to current rates if no fixed rate available
+    return CURRENCY_RATES[currency]
+
+
+def initialize_investor_defaults():
+    """Initialize investor-specific default contributions from secrets."""
+    current_user = st.session_state.get("user", "")
+    secrets_defaults = get_investor_defaults_from_secrets()
+
+    if current_user in secrets_defaults:
+        if "new_investor_contributions" not in st.session_state:
+            st.session_state.new_investor_contributions = {}
+
+        # Values in secrets are already in AED, no conversion needed
+        for date_str, amount_aed in secrets_defaults[current_user].items():
+            st.session_state.new_investor_contributions[date_str] = amount_aed
+
+
+# --- Sections ---
+def section_contributions(
+    selected_participant: str, contrib_df: pd.DataFrame
+) -> pd.DataFrame:
+    st.subheader("Contributions")
+    with st.container(border=True):
         if selected_participant == "New investor":
-            st.markdown(f"**Your investments (in {selected_currency})**")
-            # st.caption(
-            #     f"Columns are dates; the single row is the editable investment amount in {selected_currency}. Windows before 2025-09-30 are hidden."
-            # )
-            st.caption(f"Please edit your desired contributions.")
+            st.caption("Edit your desired contribution schedule")
+            selected_currency = st.session_state.get("currency", EUR)
 
+            # Initialize investor-specific defaults
+            initialize_investor_defaults()
+
+            # Initialize session state for contributions if not exists
+            if "new_investor_contributions" not in st.session_state:
+                st.session_state.new_investor_contributions = {}
+
+            # Show all contributions in the same row layout
             editable_dates = [d for d in INVESTMENT_DATES if d >= EDITABLE_START]
-            date_cols = [d.strftime("%Y-%m-%d") for d in editable_dates]
+            cols = st.columns(len(editable_dates))
 
-            # Initialize session state for new investor data if not exists
-            if "new_investor_data" not in st.session_state:
-                # Default value: 75,000 EUR converted to AED for the first installment
-                default_eur_amount = 75000.0
-                default_aed_amount = round(default_eur_amount * AED_PER_EUR)
-
-                st.session_state.new_investor_data = {}
-                for i, d in enumerate(editable_dates):
-                    if i == 0:  # First installment gets the default value
-                        st.session_state.new_investor_data[d.strftime("%Y-%m-%d")] = (
-                            default_aed_amount
-                        )
-                    else:  # Other installments start at 0
-                        st.session_state.new_investor_data[d.strftime("%Y-%m-%d")] = 0.0
-
-            # Create individual number inputs in columns
-
-            # st.caption(
-            #     "💡 Tip: If editing the same field twice, you may need to enter the value twice due to Streamlit's reactive behavior."
-            # )
-
-            # Create columns for the inputs
-            cols = st.columns(len(date_cols))
-
-            for i, col in enumerate(date_cols):
+            for i, d in enumerate(editable_dates):
                 with cols[i]:
-                    # Get current AED value
-                    current_aed_value = st.session_state.new_investor_data[col]
-                    # Convert to display currency and round to integer
-                    current_display_value = round(
-                        current_aed_value * CURRENCY_RATES[selected_currency]
-                    )
+                    # Get stored AED value from session state, or use current contrib_df value
+                    date_key = d.isoformat()
+                    if date_key in st.session_state.new_investor_contributions:
+                        current_aed_value = st.session_state.new_investor_contributions[
+                            date_key
+                        ]
+                    else:
+                        current_aed_value = contrib_df.loc[
+                            pd.Timestamp(d), "New investor"
+                        ]
+                        st.session_state.new_investor_contributions[date_key] = (
+                            current_aed_value
+                        )
 
-                    # Create number input
-                    new_display_value = st.number_input(
-                        label=col,
-                        value=float(current_display_value),  # Ensure it's a clean float
-                        min_value=0.0,
-                        step=10000.0,
-                        format="%.0f",
-                        key=f"investment_{col}_{selected_currency}",
-                        help=f"Amount in {selected_currency}",
-                    )
+                    # Convert to display currency using fixed rates for past dates
+                    rate = get_currency_rate_for_date(date_key, selected_currency)
+                    current_display_value = round(current_aed_value * rate)
 
-                    # Convert back to AED and store (round to avoid precision issues)
-                    new_aed_value = round(
-                        new_display_value / CURRENCY_RATES[selected_currency]
-                    )
-                    st.session_state.new_investor_data[col] = new_aed_value
-                    contrib_df.loc[pd.Timestamp(col), "New investor"] = new_aed_value
+                    # Check if this is the fixed date (2025-09-30)
+                    fixed_date = date(2025, 9, 30)
+                    is_fixed = d == fixed_date
 
-            # st.markdown("---")
-            st.markdown(f"**Aldar installment plan (in {selected_currency})**")
+                    if is_fixed:
+                        # Show as disabled input for fixed date
+                        amt = st.number_input(
+                            f"{d.isoformat()} (Fixed)",
+                            min_value=0.0,
+                            step=10_000.0,
+                            value=float(current_display_value),
+                            format="%.0f",
+                            help=f"Amount in {selected_currency} - This contribution is fixed",
+                            key=f"contrib_{date_key}_{selected_currency}",
+                            disabled=True,
+                        )
+                        # Keep the original AED value for fixed date
+                        amt_aed = current_aed_value
+                    else:
+                        # Show as editable input for other dates
+                        amt = st.number_input(
+                            d.isoformat(),
+                            min_value=0.0,
+                            step=10_000.0,
+                            value=float(current_display_value),
+                            format="%.0f",
+                            help=f"Amount in {selected_currency}",
+                            key=f"contrib_{date_key}_{selected_currency}",
+                        )
+                        # Convert back to AED for storage using the same rate
+                        amt_aed = round(amt / rate)
 
-            # Create horizontal table like the editable one, but read-only
-            all_dates = [d for d in INVESTMENT_DATES]
-            all_date_cols = [d.strftime("%Y-%m-%d") for d in all_dates]
-            plan_values = [
-                round(ALDAR_PLAN.get(d, 0.0) * CURRENCY_RATES[selected_currency])
-                for d in all_dates
-            ]
-            plan_horiz_df = pd.DataFrame(
-                [plan_values],
-                index=[f"Installment ({selected_currency})"],
-                columns=all_date_cols,
-            )
-
-            st.dataframe(
-                plan_horiz_df.style.format("{:,.0f}"),
-                use_container_width=True,
-            )
-
+                    contrib_df.loc[pd.Timestamp(d), "New investor"] = amt_aed
+                    # Store in session state
+                    st.session_state.new_investor_contributions[date_key] = amt_aed
         else:
-            st.markdown("**Antoine & New investor (inline)**")
-            st.caption("Rows before 2025-09-30 are fixed. Total plan is locked.")
+            st.caption("Admin view with inline editor")
+            selected_currency = st.session_state.get("currency", EUR)
+
+            # Initialize session state for admin contributions if not exists
+            if "admin_contributions" not in st.session_state:
+                st.session_state.admin_contributions = {}
+
             edit_idx = [
                 pd.Timestamp(d) for d in INVESTMENT_DATES if d >= EDITABLE_START
             ]
             editor_df = contrib_df.loc[
                 edit_idx, ["Antoine", "New investor", "Total plan"]
             ].copy()
+
+            # Use stored values from session state if available
+            for date_idx in edit_idx:
+                date_key = date_idx.date().isoformat()
+                if date_key in st.session_state.admin_contributions:
+                    stored_values = st.session_state.admin_contributions[date_key]
+                    editor_df.loc[date_idx, "Antoine"] = stored_values.get(
+                        "Antoine", editor_df.loc[date_idx, "Antoine"]
+                    )
+                    editor_df.loc[date_idx, "New investor"] = stored_values.get(
+                        "New investor", editor_df.loc[date_idx, "New investor"]
+                    )
+
+            # Convert AED values to display currency for editing using fixed rates
+            for date_idx in editor_df.index:
+                date_key = date_idx.date().isoformat()
+                rate = get_currency_rate_for_date(date_key, selected_currency)
+                editor_df.loc[date_idx, "Antoine"] = (
+                    editor_df.loc[date_idx, "Antoine"] * rate
+                )
+                editor_df.loc[date_idx, "New investor"] = (
+                    editor_df.loc[date_idx, "New investor"] * rate
+                )
+                editor_df.loc[date_idx, "Total plan"] = (
+                    editor_df.loc[date_idx, "Total plan"] * rate
+                )
+
             editor_df = editor_df.reset_index().rename(columns={"index": "date"})
             editor_df["date"] = editor_df["date"].dt.strftime("%Y-%m-%d")
-
             edited = st.data_editor(
                 editor_df,
                 hide_index=True,
                 use_container_width=True,
                 column_config={
-                    "date": st.column_config.TextColumn(
-                        "date", help="Installment window", disabled=True
-                    ),
+                    "date": st.column_config.TextColumn("date", disabled=True),
                     "Antoine": st.column_config.NumberColumn(
-                        "Antoine", format="%.0f", min_value=0.0, step=50_000.0
+                        f"Antoine ({selected_currency})",
+                        format="%.0f",
+                        min_value=0.0,
+                        step=50_000.0,
                     ),
                     "New investor": st.column_config.NumberColumn(
-                        "New investor", format="%.0f", min_value=0.0, step=50_000.0
+                        f"New investor ({selected_currency})",
+                        format="%.0f",
+                        min_value=0.0,
+                        step=50_000.0,
                     ),
                     "Total plan": st.column_config.NumberColumn(
-                        "Total plan", format="%.0f", disabled=True
+                        f"Total plan ({selected_currency})",
+                        format="%.0f",
+                        disabled=True,
                     ),
                 },
                 key="contrib_editor_all",
             )
             edited_dates = pd.to_datetime(edited["date"])
-            contrib_df.loc[edited_dates, "Antoine"] = (
-                pd.to_numeric(edited["Antoine"], errors="coerce")
-                .fillna(0.0)
-                .round()
-                .values
-            )
-            contrib_df.loc[edited_dates, "New investor"] = (
-                pd.to_numeric(edited["New investor"], errors="coerce")
-                .fillna(0.0)
-                .round()
-                .values
-            )
 
-    # Warn if over plan
-    over_by = (contrib_df["Antoine"] + contrib_df["New investor"]) - contrib_df[
-        "Total plan"
-    ]
-    if (over_by > 0).any():
-        bad_dates = [d.date().isoformat() for d in contrib_df.index[over_by > 0]]
-        st.warning(
-            "On some installment dates, Total Investment exceeds Aldar required payment. Residual set to 0 for: "
-            + ", ".join(bad_dates)
-        )
+            # Convert back to AED for storage using fixed rates
+            for i, date_idx in enumerate(edited_dates):
+                date_key = date_idx.date().isoformat()
+                rate = get_currency_rate_for_date(date_key, selected_currency)
 
-    # -------------------- 2) Invested balances (daily) --------------------
-    end_for_invested = max(
-        sell_date,
-        TODAY,
-        price_series.index.max().date() if len(price_series) else ACQ_DATE,
-    )
-    daily_invested = build_daily_invested(contrib_df, ACQ_DATE, end_for_invested)
+                contrib_df.loc[date_idx, "Antoine"] = round(
+                    pd.to_numeric(edited.iloc[i]["Antoine"], errors="coerce") / rate
+                )
+                contrib_df.loc[date_idx, "New investor"] = round(
+                    pd.to_numeric(edited.iloc[i]["New investor"], errors="coerce")
+                    / rate
+                )
 
-    st.subheader("Invested balances")
+            # Store values in session state
+            for i, date_idx in enumerate(edited_dates):
+                date_key = date_idx.date().isoformat()
+                st.session_state.admin_contributions[date_key] = {
+                    "Antoine": contrib_df.loc[date_idx, "Antoine"],
+                    "New investor": contrib_df.loc[date_idx, "New investor"],
+                }
+    return contrib_df
 
-    global ALT_AVAILABLE
+
+def section_charts(
+    daily_invested: pd.DataFrame,
+    price_series: pd.Series,
+    selected_participant: str,
+    is_admin: bool,
+):
     try:
-        alt = __import__("altair")
-        ALT_AVAILABLE = True
-    except Exception:
-        ALT_AVAILABLE = False
+        import altair as alt
+    except Exception as e:
+        show_fatal("Altair import failed. Did you install requirements.txt?", e)
+        return
 
-    def _bimonth_ticks(start_ts: pd.Timestamp, end_ts: pd.Timestamp):
-        start_month = pd.Timestamp(start_ts).normalize().replace(day=1)
-        end_month = pd.Timestamp(end_ts).normalize().replace(day=1)
-        months = pd.date_range(start_month, end_month, freq="2MS")
-        if ALT_AVAILABLE:
-            return [alt.DateTime(year=m.year, month=m.month) for m in months]
-        else:
-            return [pd.Timestamp(m) for m in months]
+    st.subheader("Charts")
 
-    di_start, di_end = pd.Timestamp(daily_invested.index.min()), pd.Timestamp(
-        daily_invested.index.max()
-    )
-    di_ticks = _bimonth_ticks(di_start, di_end)
+    # First chart: Investment amounts over time
+    st.markdown("**Investment Amounts Over Time**")
+    with st.container(border=True):
+        di = daily_invested.copy()
+        cur = st.session_state.get("currency", EUR)
+        for col in ["Antoine", "New investor", "Other investors", "Total"]:
+            di[col] = di[col] * CURRENCY_RATES[cur]
+        df_all = di.reset_index().rename(columns={"index": "date"})
 
-    # All participants chart (Antoine view only)
-    if selected_participant == "Antoine":
-        if ALT_AVAILABLE:
-            df_all = daily_invested.reset_index().rename(columns={"index": "date"})
-            # Convert to selected currency for display
-            for col in ["Antoine", "New investor", "Other investors"]:
-                df_all[col] = df_all[col] * CURRENCY_RATES[selected_currency]
-
-            chart_all = (
+        if is_admin:
+            chart = (
                 alt.Chart(df_all)
                 .transform_fold(
                     ["Antoine", "New investor", "Other investors"],
                     as_=["participant", "value"],
                 )
-                .mark_line()
+                .mark_line(
+                    strokeWidth=3, point=alt.OverlayMarkDef(size=60, filled=True)
+                )
                 .encode(
                     x=alt.X(
                         "date:T",
-                        axis=alt.Axis(format="%b %Y", labelAngle=0, values=di_ticks),
+                        axis=alt.Axis(format="%b %Y", labelAngle=0, title=None),
                     ),
-                    y=alt.Y("value:Q", title=f"Invested ({selected_currency})"),
+                    y=alt.Y("value:Q", title=f"Invested Amount ({cur})"),
                     color=alt.Color(
-                        "participant:N", legend=alt.Legend(title="Participant")
+                        "participant:N",
+                        legend=alt.Legend(title="Investor"),
+                        scale=alt.Scale(scheme="category10"),
                     ),
+                    tooltip=[
+                        alt.Tooltip("date:T", title="Date", format="%B %Y"),
+                        alt.Tooltip("participant:N", title="Investor"),
+                        alt.Tooltip("value:Q", title=f"Amount ({cur})", format=",.0f"),
+                    ],
                 )
-                .properties(height=300)
+                .properties(height=350)
+                .configure_axis(
+                    grid=True,
+                    gridColor="#f0f0f0",
+                    domainColor="#e0e0e0",
+                    labelColor="#374151",
+                    titleColor="#111827",
+                )
+                .configure_legend(labelColor="#374151", titleColor="#111827")
             )
-            st.altair_chart(chart_all, use_container_width=True)
         else:
-            # Convert data for line chart
-            daily_invested_display = daily_invested[
-                ["Antoine", "New investor", "Other investors"]
-            ].copy()
-            daily_invested_display = (
-                daily_invested_display * CURRENCY_RATES[selected_currency]
+            df_one = df_all[["date", selected_participant]].rename(
+                columns={selected_participant: "value"}
             )
-            st.line_chart(daily_invested_display)
-
-        # Unit price projection (Antoine only)
-        st.markdown("**Unit price over time (projection)**")
-        show_usd = st.checkbox(
-            "Show price in USD", value=False, help="Convert from AED at fixed 3.6725"
-        )
-        series = price_series.sort_index()
-        series = pd.to_numeric(series, errors="coerce")
-        if show_usd:
-            series = series / AED_PER_USD
-            y_title = "Price (USD)"
-            acq_p = ACQ_PRICE / AED_PER_USD
-            tgt_p = TARGET_PRICE / AED_PER_USD
-        else:
-            y_title = "Price (AED)"
-            acq_p = ACQ_PRICE
-            tgt_p = TARGET_PRICE
-        df_price = series.reset_index()
-        df_price.columns = ["date", "price"]
-        df_price = df_price.dropna().reset_index(drop=True)
-        ps_start, ps_end = pd.Timestamp(df_price["date"].min()), pd.Timestamp(
-            df_price["date"].max()
-        )
-        ps_ticks = _bimonth_ticks(ps_start, ps_end)
-        if ALT_AVAILABLE and not df_price.empty:
-            line = (
-                alt.Chart(df_price)
-                .mark_line()
+            chart = (
+                alt.Chart(df_one)
+                .mark_line(
+                    strokeWidth=3,
+                    color="#0F766E",
+                    point=alt.OverlayMarkDef(size=60, filled=True, color="#0F766E"),
+                )
                 .encode(
                     x=alt.X(
                         "date:T",
-                        axis=alt.Axis(format="%b %Y", labelAngle=0, values=ps_ticks),
+                        axis=alt.Axis(format="%b %Y", labelAngle=0, title=None),
                     ),
-                    y=alt.Y("price:Q", title=y_title),
+                    y=alt.Y("value:Q", title=f"Invested Amount ({cur})"),
+                    tooltip=[
+                        alt.Tooltip("date:T", title="Date", format="%B %Y"),
+                        alt.Tooltip("value:Q", title=f"Amount ({cur})", format=",.0f"),
+                    ],
                 )
-                .properties(height=300)
-            )
-            rule_acq = (
-                alt.Chart(pd.DataFrame({"date": [pd.Timestamp(ACQ_DATE)]}))
-                .mark_rule(strokeDash=[4, 4])
-                .encode(x="date:T")
-            )
-            rule_tgt = (
-                alt.Chart(pd.DataFrame({"date": [pd.Timestamp(TARGET_DATE)]}))
-                .mark_rule(strokeDash=[4, 4])
-                .encode(x="date:T")
-            )
-            markers_df = pd.DataFrame(
-                {
-                    "date": [pd.Timestamp(ACQ_DATE), pd.Timestamp(TARGET_DATE)],
-                    "price": [acq_p, tgt_p],
-                    "label": ["Acquisition", "Target"],
-                }
-            )
-            pts = (
-                alt.Chart(markers_df)
-                .mark_point(filled=True, size=80)
-                .encode(
-                    x="date:T",
-                    y="price:Q",
-                    shape="label:N",
-                    tooltip=["label", "date:T", "price:Q"],
+                .properties(height=350)
+                .configure_axis(
+                    grid=True,
+                    gridColor="#f0f0f0",
+                    domainColor="#e0e0e0",
+                    labelColor="#374151",
+                    titleColor="#111827",
                 )
             )
-            txt = (
-                alt.Chart(markers_df)
-                .mark_text(align="left", dx=5, dy=-5)
-                .encode(x="date:T", y="price:Q", text="label")
-            )
-            st.altair_chart(
-                line + rule_acq + rule_tgt + pts + txt, use_container_width=True
-            )
-        else:
-            st.line_chart(df_price.set_index("date")["price"].to_frame(name=y_title))
 
-    # Selected participant – invested amount
-    if ALT_AVAILABLE:
-        df_sel = daily_invested.reset_index().rename(columns={"index": "date"})
-        # Convert to selected currency for display
-        df_sel[selected_participant] = (
-            df_sel[selected_participant] * CURRENCY_RATES[selected_currency]
-        )
+        st.altair_chart(chart, use_container_width=True)
 
-        st.altair_chart(
-            alt.Chart(df_sel)
-            .mark_line()
+    # Second chart: Unit price over time (as bars)
+    st.markdown("**Unit Price Over Time**")
+    with st.container(border=True):
+        ps = price_series.reset_index()
+        ps.columns = ["date", "price"]
+
+        # Create bar chart for price
+        price_chart = (
+            alt.Chart(ps)
+            .mark_bar(color="#0F766E", cornerRadius=4, opacity=0.8)
             .encode(
-                x=alt.X(
-                    "date:T",
-                    axis=alt.Axis(format="%b %Y", labelAngle=0, values=di_ticks),
-                ),
-                y=alt.Y(
-                    f"{selected_participant}:Q", title=f"Invested ({selected_currency})"
-                ),
+                x=alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=0)),
+                y=alt.Y("price:Q", title="Unit Price (AED)"),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date", format="%B %Y"),
+                    alt.Tooltip("price:Q", title="Price (AED)", format=",.0f"),
+                ],
             )
-            .properties(height=300),
-            use_container_width=True,
-        )
-    else:
-        # Convert data for line chart
-        daily_invested_display = daily_invested[[selected_participant]].copy()
-        daily_invested_display = (
-            daily_invested_display * CURRENCY_RATES[selected_currency]
-        )
-        st.line_chart(daily_invested_display)
-
-    # Share of total (scaled ticks)
-    share_series = (
-        (daily_invested[selected_participant] / daily_invested["Total"])
-        .replace([np.inf, -np.inf], np.nan)
-        .fillna(0.0)
-    )
-    share_max = float(share_series.max())
-    quintiles = [0.2, 0.4, 0.6, 0.8, 1.0]
-    y_max = next((q for q in quintiles if share_max <= q), 1.0)
-    y_max = max(0.2, min(1.0, y_max))
-    if ALT_AVAILABLE:
-        share_df = share_series.reset_index()
-        share_df.columns = ["date", "share"]
-        tick_vals = [i / 10 for i in range(0, int(y_max * 10) + 1)]
-        if share_max < 0.10 and 0.05 not in tick_vals:
-            tick_vals = [0.0, 0.05] + [t for t in tick_vals if t != 0.0]
-        st.altair_chart(
-            alt.Chart(share_df)
-            .mark_line()
-            .encode(
-                x=alt.X(
-                    "date:T",
-                    axis=alt.Axis(format="%b %Y", labelAngle=0, values=di_ticks),
-                ),
-                y=alt.Y(
-                    "share:Q",
-                    title="Share of total amount invested",
-                    scale=alt.Scale(domain=[0, y_max]),
-                    axis=alt.Axis(format="%", values=tick_vals),
-                ),
+            .properties(height=350)
+            .configure_axis(
+                grid=True,
+                gridColor="#f0f0f0",
+                domainColor="#e0e0e0",
+                labelColor="#374151",
+                titleColor="#111827",
             )
-            .properties(height=300),
-            use_container_width=True,
-        )
-    else:
-        st.line_chart(share_series)
-
-    # Ensure price covers sell_date/today
-    min_needed_end = max(TODAY, sell_date)
-    if price_series.index.max().date() < min_needed_end:
-        last_date = price_series.index.max().date()
-        last_price = float(price_series.iloc[-1])
-        ext_idx = make_daily_index(last_date, min_needed_end)
-        add = pd.Series(last_price, index=ext_idx)
-        price_series = pd.concat([price_series, add[1:]])
-
-    # -------------------- Gains --------------------
-    results_today = gains_at_date(
-        TODAY, ACQ_DATE, ACQ_PRICE, price_series, daily_invested
-    )
-    results_sell = gains_at_date(
-        sell_date, ACQ_DATE, ACQ_PRICE, price_series, daily_invested
-    )
-    results_exit, exit_rate = exit_gains_at_date(
-        sell_date, ACQ_DATE, ACQ_PRICE, price_series, daily_invested
-    )
-
-    g_display = per_part_guarantee(sell_date, ACQ_DATE, daily_invested, exit_rate)
-    exit_rate_label = f"{int(round(exit_rate*100))}%"
-
-    parts = ["Antoine", "New investor", "Other investors"]
-    summary_today = pd.DataFrame(
-        {
-            p: {
-                "Appreciation-based": results_today[p].appreciation,
-                "Guaranteed (15% p.a.)": (
-                    0.0 if p == "Antoine" else results_today[p].guarantee
-                ),
-                "Final (max/residual)": results_today[p].final,
-            }
-            for p in parts
-        }
-    ).T
-
-    summary_sell = pd.DataFrame(
-        {
-            p: {
-                "Appreciation-based": results_sell[p].appreciation,
-                "Guaranteed (15% p.a.)": (
-                    0.0 if p == "Antoine" else results_sell[p].guarantee
-                ),
-                "Final (max/residual)": results_sell[p].final,
-            }
-            for p in parts
-        }
-    ).T
-
-    summary_exit = pd.DataFrame(
-        {
-            p: {
-                f"Guaranteed ({exit_rate_label} p.a.)": (
-                    0.0 if p == "Antoine" else g_display[p]
-                ),
-                "Final (exit residual)": results_exit[p],
-            }
-            for p in parts
-        }
-    ).T
-
-    # Convert all summary dataframes to selected currency
-    summary_today_display = summary_today * CURRENCY_RATES[selected_currency]
-    summary_sell_display = summary_sell * CURRENCY_RATES[selected_currency]
-    summary_exit_display = summary_exit * CURRENCY_RATES[selected_currency]
-
-    # Prices & total appreciation
-    try:
-        price_today_val = float(price_series.sort_index().loc[pd.Timestamp(TODAY)])
-    except KeyError:
-        price_today_val = float(
-            price_series.sort_index()
-            .reindex(price_series.index.union([pd.Timestamp(TODAY)]))
-            .interpolate(method="time")
-            .loc[pd.Timestamp(TODAY)]
-        )
-    try:
-        price_sell_val = float(price_series.sort_index().loc[pd.Timestamp(sell_date)])
-    except KeyError:
-        price_sell_val = float(
-            price_series.sort_index()
-            .reindex(price_series.index.union([pd.Timestamp(sell_date)]))
-            .interpolate(method="time")
-            .loc[pd.Timestamp(sell_date)]
         )
 
-    total_appreciation_today = max(price_today_val - ACQ_PRICE, 0.0)
-    total_appreciation_sell = max(price_sell_val - ACQ_PRICE, 0.0)
+        st.altair_chart(price_chart, use_container_width=True)
 
-    # -------------------- Cards --------------------
-    with metrics_box:
 
-        def small_metric(
-            label: str, primary_value: str, secondary_value: str | None = None
-        ):
+def render_performance(
+    perf_box,
+    selected_participant: str,
+    price_series: pd.Series,
+    sell_date,
+    daily_invested: pd.DataFrame,
+    contrib_df: pd.DataFrame,
+):
+    with perf_box:
+        st.subheader("Performance")
+        ps = price_series.sort_index()
+        if ps.empty:
+            show_fatal("Price series is empty.")
+            return 0.0, 0.0
+
+        if datetime.now().date() not in ps.index.date:
+            ps = (
+                ps.reindex(ps.index.union([pd.Timestamp(datetime.now().date())]))
+                .interpolate(method="time")
+                .ffill()
+                .bfill()
+            )
+        if pd.Timestamp(sell_date) not in ps.index:
+            ps = (
+                ps.reindex(ps.index.union([pd.Timestamp(sell_date)]))
+                .interpolate(method="time")
+                .ffill()
+                .bfill()
+            )
+
+        price_today_val = float(ps.loc[pd.Timestamp(datetime.now().date())])
+        price_sell_val = float(ps.loc[pd.Timestamp(sell_date)])
+
+        try:
+            results_today = gains_at_date(
+                datetime.now().date(),
+                ACQ_DATE,
+                ACQ_PRICE,
+                ps,
+                daily_invested,
+                contrib_df,
+            )
+            results_sell = gains_at_date(
+                sell_date, ACQ_DATE, ACQ_PRICE, ps, daily_invested, contrib_df
+            )
+            results_exit, exit_rate = exit_gains_at_date(
+                sell_date, ACQ_DATE, ACQ_PRICE, ps, daily_invested, contrib_df
+            )
+        except Exception as e:
+            show_fatal("Error computing gains.", e)
+            return price_today_val, price_sell_val
+
+        aed_today = (
+            results_today[selected_participant].final
+            if hasattr(results_today[selected_participant], "final")
+            else results_today[selected_participant]
+        )
+        aed_today_guarantee = (
+            results_today[selected_participant].guarantee
+            if hasattr(results_today[selected_participant], "guarantee")
+            else 0.0
+        )
+        aed_sell = (
+            results_sell[selected_participant].final
+            if hasattr(results_sell[selected_participant], "final")
+            else results_sell[selected_participant]
+        )
+        aed_exit = results_exit[selected_participant]
+        rate = int(round(exit_rate * 100))
+
+        # First column: Today's gains (combined in one card)
+        c1, c2 = st.columns([1, 1])
+        with c1:
             st.markdown(
                 f"""
-            <div style="border:1px solid rgba(49,51,63,0.15); border-radius:12px; padding:12px 16px; background:rgba(250,250,250,0.6);">
-              <div style="font-size:0.95rem; color:rgba(49,51,63,0.75); margin-bottom:6px;">{label}</div>
-              <div style="font-size:1.6rem; font-weight:800; line-height:1.15; margin-bottom:2px;">{primary_value}</div>
-              {f'<div style="font-size:1.0rem; color:rgba(49,51,63,0.7);">{secondary_value}</div>' if secondary_value else ''}
-            </div>
-            """,
+<div class="stat-card lg">
+  <div class="card-head">Gains Today</div>
+  <hr>
+  <div style="margin-bottom: 12px;">
+    <div style="font-size: 0.9rem; color: rgba(49,51,63,0.7); margin-bottom: 4px;">Estimated (max)</div>
+    <div class="card-value" style="font-size: 1.4rem; margin-bottom: 8px;">{fmt_currency(aed_today)}</div>
+  </div>
+  <div>
+    <div style="font-size: 0.9rem; color: rgba(49,51,63,0.7); margin-bottom: 4px;">Guaranteed (15% p.a.)</div>
+    <div class="card-value" style="font-size: 1.2rem; color: rgba(49,51,63,0.8);">{fmt_currency(aed_today_guarantee)}</div>
+  </div>
+</div>
+""",
                 unsafe_allow_html=True,
             )
 
-        aed_today_val = float(
-            summary_today.loc[selected_participant, "Final (max/residual)"]
-        )
-        aed_sell_val = float(
-            summary_sell.loc[selected_participant, "Final (max/residual)"]
-        )
-        aed_exit_val = float(
-            summary_exit.loc[selected_participant, "Final (exit residual)"]
-        )
+        # Second column: Future gains (combined in one card)
+        with c2:
+            st.markdown(
+                f"""
+<div class="stat-card lg">
+  <div class="card-head">Gains at {sell_date.isoformat()}</div>
+  <hr>
+  <div style="margin-bottom: 12px;">
+    <div style="font-size: 0.9rem; color: rgba(49,51,63,0.7); margin-bottom: 4px;">Estimated (sale)</div>
+    <div class="card-value" style="font-size: 1.4rem; margin-bottom: 8px;">{fmt_currency(aed_sell)}</div>
+  </div>
+  <div>
+    <div style="font-size: 0.9rem; color: rgba(49,51,63,0.7); margin-bottom: 4px;">Guaranteed (exit @{rate}% p.a.)</div>
+    <div class="card-value" style="font-size: 1.2rem; color: rgba(49,51,63,0.8);">{fmt_currency(aed_exit)}</div>
+  </div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
 
-        usd_today = aed_today_val / AED_PER_USD
-        usd_sell = aed_sell_val / AED_PER_USD
-        usd_exit = aed_exit_val / AED_PER_USD
+    return price_today_val, price_sell_val
 
-        c1, c2, c3 = st.columns(3)
+
+def render_overview(overview_box, sell_date, price_today_val, price_sell_val):
+    with overview_box:
+        st.subheader("Overview")
+        c1, c2 = st.columns([1, 1])
+
+        # Calculate appreciation amounts
+        appreciation_today = price_today_val - ACQ_PRICE
+        appreciation_sell = price_sell_val - ACQ_PRICE
+
         with c1:
-            small_metric(
-                "Gains TODAY (from sale)",
-                fmt_currency(aed_today_val, selected_currency),
-                fmt_aed(aed_today_val) if selected_currency != AED else None,
+            st.markdown(
+                f"""
+<div class="stat-card">
+  <div class="card-head">Estimated Apartment Price today</div>
+  <hr>
+  <div class="card-value">{fmt_currency(price_today_val)}</div>
+  <div class="card-sub">Estimated appreciation: {fmt_currency(appreciation_today)}</div>
+</div>
+""",
+                unsafe_allow_html=True,
             )
         with c2:
-            small_metric(
-                f"Gains at {sell_date.isoformat()} (from sale)",
-                fmt_currency(aed_sell_val, selected_currency),
-                fmt_aed(aed_sell_val) if selected_currency != AED else None,
-            )
-        with c3:
-            small_metric(
-                f"Gains at {sell_date.isoformat()} (EXIT @ {exit_rate_label}, no sale)",
-                fmt_currency(aed_exit_val, selected_currency),
-                fmt_aed(aed_exit_val) if selected_currency != AED else None,
-            )
-
-        r2c1, r2c2, r2c3 = st.columns(3)
-        with r2c1:
-            st.metric(
-                "Estimated total appreciation today",
-                fmt_currency(total_appreciation_today, selected_currency),
-            )
             st.markdown(
                 f"""
-                <div style="line-height:1.2; margin-top:2px;">
-                                     <div>Estimated price today ({selected_currency})</div>
-                   <div style="font-weight:700; font-size:1.15rem; margin-top:1px;">{fmt_currency(price_today_val, selected_currency)}</div>
-                </div>
-                """,
+<div class="stat-card">
+  <div class="card-head">Estimated Apartment Price at {sell_date.isoformat()}</div>
+  <hr>
+  <div class="card-value">{fmt_currency(price_sell_val)}</div>
+  <div class="card-sub">Estimated appreciation: {fmt_currency(appreciation_sell)}</div>
+</div>
+""",
                 unsafe_allow_html=True,
             )
-        with r2c2:
-            st.metric(
-                f"Estimated total appreciation at {sell_date.isoformat()}",
-                fmt_currency(total_appreciation_sell, selected_currency),
-            )
-            st.markdown(
-                f"""
-                <div style="line-height:1.2; margin-top:2px;">
-                                     <div>Estimated price at {sell_date.isoformat()} ({selected_currency})</div>
-                   <div style="font-weight:700; font-size:1.15rem; margin-top:1px;">{fmt_currency(price_sell_val, selected_currency)}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with r2c3:
-            # Empty third column as requested
-            pass
-
-    # -------------------- Sanity checks --------------------
-    if selected_participant != "New investor":
-        sale_sum_final = float(summary_sell["Final (max/residual)"].sum())
-        exit_sum_final = float(summary_exit["Final (exit residual)"].sum())
-        tol = max(1e-6, 1e-9 * max(total_appreciation_sell, 1.0))
-
-        st.subheader("Sanity checks")
-        diff_sale = sale_sum_final - total_appreciation_sell
-        if abs(diff_sale) <= tol:
-            st.success(
-                f"SALE check passed: sum of final gains = total appreciation ({fmt_currency(sale_sum_final, selected_currency)})."
-            )
-        else:
-            st.error(
-                f"SALE check FAILED: participants sum {fmt_currency(sale_sum_final, selected_currency)} vs total appreciation {fmt_currency(total_appreciation_sell, selected_currency)} (Δ={fmt_currency(diff_sale, selected_currency)})."
-            )
-
-        diff_exit = exit_sum_final - total_appreciation_sell
-        if abs(diff_exit) <= tol:
-            st.success(
-                f"EXIT {exit_rate_label} check passed: sum of final gains = total appreciation ({fmt_currency(exit_sum_final, selected_currency)})."
-            )
-        else:
-            st.error(
-                f"EXIT {exit_rate_label} check FAILED: participants sum {fmt_currency(exit_sum_final, selected_currency)} vs total appreciation {fmt_currency(total_appreciation_sell, selected_currency)} (Δ={fmt_currency(diff_exit, selected_currency)})."
-            )
-
-    # # -------------------- 3) Gains breakdown --------------------
-    # st.subheader("3) Gains breakdown")
-    # col1, col2, col3 = st.columns(3)
-    # with col1:
-    #     st.markdown("**Today – SALE (others: max(app, 15%); Antoine: residual)**")
-    #     st.dataframe(
-    #         summary_today_display.style.format("{:,.0f}"), use_container_width=True
-    #     )
-    # with col2:
-    #     st.markdown(
-    #         f"**At {sell_date.isoformat()} – SALE (others: max(app, 15%); Antoine: residual)**"
-    #     )
-    #     st.dataframe(
-    #         summary_sell_display.style.format("{:,.0f}"), use_container_width=True
-    #     )
-    # with col3:
-    #     st.markdown(
-    #         f"**At {sell_date.isoformat()} – EXIT @ {exit_rate_label} (others: guarantee; Antoine: residual)**"
-    #     )
-    #     st.dataframe(
-    #         summary_exit_display.style.format("{:,.0f}"), use_container_width=True
-    #     )
-
-    # -------------------- 4) Notes --------------------
+        # c3 is left empty as requested
 
 
-#     st.subheader("4) Notes & next steps")
-#     st.markdown(
-#         f"""
-# - **Other investors** are computed as residual of the **Total Project Inflow** plan _minus_ Antoine and New investor on each window (never negative).
-# - **Total Project Inflow** follows the fixed Aldar installment plan embedded in the app (read-only).
-# - **SALE case (default)**:
-#   - Other investors receive the greater of **appreciation-based** or **15% p.a. guarantee** (time-weighted).
-#   - **Antoine** receives the **residual of the project appreciation** (no guarantee).
-# - **EXIT case**:
-#   - If the scenario date is **on/before 2028-09-30**, other investors receive **15% p.a.** time-weighted guarantees.
-#   - If the scenario date is **after 2028-09-30**, other investors receive **20% p.a.** time-weighted guarantees.
-#   - **Antoine** receives the **residual of the project appreciation** after those guarantees.
-# - Acquisition date and price are **fixed**: {ACQ_DATE} and {fmt_currency(ACQ_PRICE, selected_currency)}.
-# - All dates use **Asia/Dubai**.
-# """
-#     )
+# --- Main App ---
+def main_app():
+    inject_css()
+    appbar()
+    sidebar_nav()
 
+    is_admin = st.session_state.get("role") == "Admin"
 
-# -------------------- CLI fallback + tests --------------------
-def _tiny_tests():
-    print("Running tiny tests…")
-    acq_date = ACQ_DATE
-    acq_price = 100.0
-    contrib = base_contrib_df([acq_date, date(2024, 10, 15)])
-    contrib.loc[pd.Timestamp(acq_date), "Antoine"] = 1000.0
-    contrib.loc[:, "Total plan"] = default_total_plan_from(contrib)
-    price_long = linear_price_series(acq_date, acq_price, date(2030, 1, 1), 200.0)
-    daily_long = build_daily_invested(contrib, acq_date, date(2030, 1, 1))
-    res_sale = gains_at_date(
-        date(2024, 10, 1), acq_date, acq_price, price_long, daily_long
-    )
-    assert "Antoine" in res_sale and "New investor" in res_sale
-    when1 = date(2028, 9, 30)
-    res_exit1, rate1 = exit_gains_at_date(
-        when1, acq_date, acq_price, price_long, daily_long
-    )
-    total_app1 = max(float(price_long.loc[pd.Timestamp(when1)]) - acq_price, 0.0)
-    assert abs(sum(res_exit1.values()) - total_app1) < 1e-6 and abs(rate1 - 0.20) < 1e-9
-    when2 = date(2028, 10, 1)
-    res_exit2, rate2 = exit_gains_at_date(
-        when2, acq_date, acq_price, price_long, daily_long
-    )
-    total_app2 = max(float(price_long.loc[pd.Timestamp(when2)]) - acq_price, 0.0)
-    assert abs(sum(res_exit2.values()) - total_app2) < 1e-6 and abs(rate2 - 0.20) < 1e-9
-    print("All tests passed ✔︎")
+    # Admin can choose whose view to display
+    if is_admin:
+        selected_participant = st.sidebar.selectbox(
+            "View as", ["New investor", "Antoine", "Other investors"], index=0
+        )
+    else:
+        selected_participant = "New investor"
 
+    # ---- Scenario selector (1/3 width) ----
+    # Place selector in the first column of a 1:2 split so it occupies ~33% width.
+    col_left, col_right = st.columns([1, 3])
+    with col_left:
+        st.markdown(
+            '<div class="scenario-card"><div class="scenario-title">Sell / exit date</div>',
+            unsafe_allow_html=True,
+        )
+        date_options = [
+            d.strftime("%Y-%m-%d") for d in INVESTMENT_DATES[3:]
+        ]  # start at 2026-05-30
+        selected_date_str = st.selectbox(
+            "",
+            options=date_options,
+            index=0,
+            label_visibility="collapsed",
+            key="scenario_main",
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+    # empty right column is just spacing to keep 1/3 width
 
-def run_cli_fallback():
-    print("Streamlit not available — running CLI fallback demo.\n")
-    print(
-        "Tip: in your conda env run:\n  python -m pip install --upgrade pip\n  python -m pip install streamlit\n  # or: conda install -c conda-forge streamlit\n"
-    )
-    acq_date = ACQ_DATE
-    acq_price = ACQ_PRICE
+    sell_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+
+    # Top containers keep layout order (Performance, then Overview)
+    perf_box = st.container()
+    overview_box = st.container()
+
+    # Build series
+    try:
+        price_series = linear_price_series(
+            ACQ_DATE, ACQ_PRICE, TARGET_DATE, TARGET_PRICE
+        )
+    except Exception as e:
+        show_fatal("Failed to build price series.", e)
+        return
+
+    # Base contributions
     contrib_df = base_contrib_df(INVESTMENT_DATES)
     for d, v in DEFAULT_ANTOINE.items():
         contrib_df.loc[pd.Timestamp(d), "Antoine"] = v
-    contrib_df["Total plan"] = 0.0
     for d in INVESTMENT_DATES:
-        contrib_df.loc[pd.Timestamp(d), "Total plan"] = ALDAR_PLAN[d]
-    price_series = linear_price_series(
-        acq_date, acq_price, INVESTMENT_DATES[-1], acq_price
-    )
-    daily = build_daily_invested(contrib_df, acq_date, INVESTMENT_DATES[-1])
-    res_today = gains_at_date(TODAY, acq_date, acq_price, price_series, daily)
-    res_exit_demo, exit_rate_demo = exit_gains_at_date(
-        TODAY, acq_date, acq_price, price_series, daily
-    )
-    print("Gains today (CLI):")
-    for k, v in res_today.items():
-        print(
-            f"  {k:<16} app={v.appreciation:,.2f}  g15={v.guarantee:,.2f}  sale_final={v.final:,.2f}"
-        )
-    print(
-        f"Exit residuals at rate {exit_rate_demo*100:.0f}% (sum equals appreciation):"
-    )
-    print(f"  Sum = {sum(res_exit_demo.values()):,.2f}")
+        contrib_df.loc[pd.Timestamp(d), "Total plan"] = ALDAR_PLAN.get(d, 0.0)
 
+    # Editor
+    contrib_df = section_contributions(selected_participant, contrib_df)
 
-# -------------------- Entrypoint --------------------
-if __name__ == "__main__":
-    if STREAMLIT_AVAILABLE and "streamlit" in sys.argv[0].lower():
-        pass
-    elif STREAMLIT_AVAILABLE:
-        _tiny_tests()
-        print("\nTo launch the web app, run:  streamlit run app.py\n")
-    else:
-        run_cli_fallback()
-
-if STREAMLIT_AVAILABLE:
+    # Invested balances
+    end_for_invested = max(sell_date, price_series.index.max().date())
     try:
-        run_streamlit_app()
+        daily_invested = build_daily_invested(contrib_df, ACQ_DATE, end_for_invested)
     except Exception as e:
-        if hasattr(st, "exception"):
-            st.exception(e)
-        else:
-            raise
+        show_fatal("Failed to build invested balances.", e)
+        return
+
+    # Performance & Overview
+    price_today_val, price_sell_val = render_performance(
+        perf_box,
+        selected_participant,
+        price_series,
+        sell_date,
+        daily_invested,
+        contrib_df,
+    )
+    render_overview(overview_box, sell_date, price_today_val, price_sell_val)
+
+    # Charts
+    section_charts(daily_invested, price_series, selected_participant, is_admin)
+
+    # Sidebar footer
+    st.sidebar.markdown("---")
+    st.sidebar.markdown(
+        """
+        <div class="sidebar-footer">
+            <span>💬</span>
+            <a href="mailto:support@oasishorizon.com" target="_blank">Contact us</a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# --- Entrypoint ---
+def run():
+    try:
+        if "admin_authed" not in st.session_state:
+            st.session_state.admin_authed = False
+        if "user" not in st.session_state:
+            login_page()
+            return
+        main_app()
+    except Exception as e:
+        show_fatal("Unhandled error. See details below.", e)
+
+
+if __name__ == "__main__":
+    run()
