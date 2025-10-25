@@ -282,6 +282,23 @@ def fmt_currency(amount_aed: float) -> str:
     symbol = "€" if cur == EUR else "$" if cur == USD else "AED "
     return f"{symbol}{val:,.0f}"
 
+def can_see_earliest_sell_date(email: str) -> bool:
+    """
+    Returns True if this user is allowed to see/select the earliest sell/exit date.
+    Configure the allowlist in .streamlit/secrets.toml under:
+    [features]
+    earliest_sell_date_allowed_users = ["someone@company.com"]
+    """
+    try:
+        # allow admins automatically, if you want that behavior
+        if st.session_state.get("role") == "Admin":
+            return True
+        allowed = st.secrets["features"]["earliest_sell_date_allowed_users"]
+        return email in allowed
+    except KeyError:
+        # if not configured, default to False (hide earliest)
+        return False
+
 
 # --- Login ---
 def login_page():
@@ -911,14 +928,44 @@ def main_app():
     # ---- Scenario selector (1/3 width) ----
     # Place selector in the first column of a 1:2 split so it occupies ~33% width.
     col_left, col_right = st.columns([1, 3])
+    # with col_left:
+    #     st.markdown(
+    #         '<div class="scenario-card"><div class="scenario-title">Sell / exit date</div>',
+    #         unsafe_allow_html=True,
+    #     )
+    #     date_options = [
+    #         d.strftime("%Y-%m-%d") for d in INVESTMENT_DATES[3:]
+    #     ]  # start at 2026-05-30
+    #     selected_date_str = st.selectbox(
+    #         "",
+    #         options=date_options,
+    #         index=0,
+    #         label_visibility="collapsed",
+    #         key="scenario_main",
+    #     )
+    #     st.markdown("</div>", unsafe_allow_html=True)
+    # empty right column is just spacing to keep 1/3 width
     with col_left:
         st.markdown(
             '<div class="scenario-card"><div class="scenario-title">Sell / exit date</div>',
             unsafe_allow_html=True,
         )
-        date_options = [
-            d.strftime("%Y-%m-%d") for d in INVESTMENT_DATES[3:]
-        ]  # start at 2026-05-30
+
+        # Build the base list you currently expose (starting at index 3 = 2026-05-30)
+        base_options = [d.strftime("%Y-%m-%d") for d in INVESTMENT_DATES[3:]]
+
+        # Hide the first date unless this user is allowlisted
+        user_email = st.session_state.get("user", "")
+        if not can_see_earliest_sell_date(user_email) and len(base_options) > 1:
+            date_options = base_options[1:]   # drop the earliest item
+        else:
+            date_options = base_options
+
+        # If the previously selected value is no longer available, reset it
+        prev = st.session_state.get("scenario_main")
+        if prev and prev not in date_options:
+            st.session_state.pop("scenario_main")
+
         selected_date_str = st.selectbox(
             "",
             options=date_options,
@@ -927,7 +974,7 @@ def main_app():
             key="scenario_main",
         )
         st.markdown("</div>", unsafe_allow_html=True)
-    # empty right column is just spacing to keep 1/3 width
+
 
     sell_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
 
