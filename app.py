@@ -39,6 +39,7 @@ try:
         gains_at_date,
         exit_gains_at_date,
         per_part_guarantee,
+        get_daily_gain_per_dollar,
     )
 except Exception as e:
     show_fatal(
@@ -282,6 +283,7 @@ def fmt_currency(amount_aed: float) -> str:
     symbol = "€" if cur == EUR else "$" if cur == USD else "AED "
     return f"{symbol}{val:,.0f}"
 
+
 def can_see_earliest_sell_date(email: str) -> bool:
     """
     Returns True if this user is allowed to see/select the earliest sell/exit date.
@@ -298,6 +300,25 @@ def can_see_earliest_sell_date(email: str) -> bool:
     except KeyError:
         # if not configured, default to False (hide earliest)
         return False
+
+
+def can_see_gains(email: str) -> bool:
+    """
+    Returns True if this user can see gains in the performance section.
+    Users not in the list will see "No investment yet".
+    Configure the allowlist in .streamlit/secrets.toml under:
+    [features]
+    gains_allowed_users = ["someone@company.com"]
+    """
+    try:
+        # allow admins automatically
+        if st.session_state.get("role") == "Admin":
+            return True
+        allowed = st.secrets["features"]["gains_allowed_users"]
+        return email in allowed
+    except KeyError:
+        # if not configured, default to True (show gains for everyone)
+        return True
 
 
 # --- Login ---
@@ -468,7 +489,7 @@ def initialize_investor_defaults():
 def section_contributions(
     selected_participant: str, contrib_df: pd.DataFrame
 ) -> pd.DataFrame:
-    st.subheader("Contributions")
+    st.subheader("Your Contributions")
     with st.container(border=True):
         if selected_participant == "New investor":
             st.caption("Edit your desired contribution schedule")
@@ -728,35 +749,36 @@ def section_charts(
 
         st.altair_chart(chart, use_container_width=True)
 
-    # Second chart: Unit price over time (as bars)
-    st.markdown("**Unit Price Over Time**")
-    with st.container(border=True):
-        ps = price_series.reset_index()
-        ps.columns = ["date", "price"]
+    # Second chart: Unit price over time (as bars) - only for admin
+    if is_admin:
+        st.markdown("**Unit Price Over Time**")
+        with st.container(border=True):
+            ps = price_series.reset_index()
+            ps.columns = ["date", "price"]
 
-        # Create bar chart for price
-        price_chart = (
-            alt.Chart(ps)
-            .mark_bar(color="#0F766E", cornerRadius=4, opacity=0.8)
-            .encode(
-                x=alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=0)),
-                y=alt.Y("price:Q", title="Unit Price (AED)"),
-                tooltip=[
-                    alt.Tooltip("date:T", title="Date", format="%B %Y"),
-                    alt.Tooltip("price:Q", title="Price (AED)", format=",.0f"),
-                ],
+            # Create bar chart for price
+            price_chart = (
+                alt.Chart(ps)
+                .mark_bar(color="#0F766E", cornerRadius=4, opacity=0.8)
+                .encode(
+                    x=alt.X("date:T", axis=alt.Axis(format="%b %Y", labelAngle=0)),
+                    y=alt.Y("price:Q", title="Unit Price (AED)"),
+                    tooltip=[
+                        alt.Tooltip("date:T", title="Date", format="%B %Y"),
+                        alt.Tooltip("price:Q", title="Price (AED)", format=",.0f"),
+                    ],
+                )
+                .properties(height=350)
+                .configure_axis(
+                    grid=True,
+                    gridColor="#f0f0f0",
+                    domainColor="#e0e0e0",
+                    labelColor="#374151",
+                    titleColor="#111827",
+                )
             )
-            .properties(height=350)
-            .configure_axis(
-                grid=True,
-                gridColor="#f0f0f0",
-                domainColor="#e0e0e0",
-                labelColor="#374151",
-                titleColor="#111827",
-            )
-        )
 
-        st.altair_chart(price_chart, use_container_width=True)
+            st.altair_chart(price_chart, use_container_width=True)
 
 
 def render_performance(
@@ -768,7 +790,7 @@ def render_performance(
     contrib_df: pd.DataFrame,
 ):
     with perf_box:
-        st.subheader("Performance")
+        st.subheader("Your Performance")
         ps = price_series.sort_index()
         if ps.empty:
             show_fatal("Price series is empty.")
@@ -829,11 +851,16 @@ def render_performance(
         aed_exit = results_exit[selected_participant]
         rate = int(round(exit_rate * 100))
 
+        # Check if user should see gains
+        user_email = st.session_state.get("user", "")
+        show_gains = can_see_gains(user_email)
+
         # First column: Today's gains (combined in one card)
         c1, c2 = st.columns([1, 1])
         with c1:
-            st.markdown(
-                f"""
+            if show_gains:
+                st.markdown(
+                    f"""
 <div class="stat-card lg">
   <div class="card-head">Gains Today</div>
   <hr>
@@ -847,8 +874,19 @@ def render_performance(
   </div>
 </div>
 """,
-                unsafe_allow_html=True,
-            )
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f"""
+<div class="stat-card lg">
+  <div class="card-head">Gains Today</div>
+  <hr>
+  <div class="card-value" style="font-size: 1.4rem; color: rgba(49,51,63,0.6);">No investment yet</div>
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
 
         # Second column: Future gains (combined in one card)
         with c2:
@@ -873,9 +911,18 @@ def render_performance(
     return price_today_val, price_sell_val
 
 
-def render_overview(overview_box, sell_date, price_today_val, price_sell_val):
+def render_overview(
+    overview_box,
+    sell_date,
+    price_today_val,
+    price_sell_val,
+    daily_invested,
+    price_series,
+):
     with overview_box:
-        st.subheader("Overview")
+        st.markdown("")  # Empty line
+        st.markdown("")  # Empty line
+        st.subheader("Project Overview")
         c1, c2 = st.columns([1, 1])
 
         # Calculate appreciation amounts
@@ -894,6 +941,36 @@ def render_overview(overview_box, sell_date, price_today_val, price_sell_val):
 """,
                 unsafe_allow_html=True,
             )
+
+            # Calculate and display daily gain per dollar
+            try:
+                daily_gain_today = get_daily_gain_per_dollar(
+                    datetime.now().date(),
+                    ACQ_DATE,
+                    ACQ_PRICE,
+                    price_series,
+                    daily_invested,
+                )
+                # Convert to basis points for better readability (multiply by 10000 to get bp)
+                daily_gain_bp = daily_gain_today * 10000
+
+                if daily_gain_today > 0:
+                    annual_rate = daily_gain_today * 365 * 100
+                    st.markdown(
+                        f"""
+<div class="stat-card" style="margin-top: 12px;">
+  <div class="card-head">Today's Estimated Return for New Investments</div>
+  <hr>
+  <div class="card-value">{annual_rate:.2f}%</div>
+  <div class="card-sub">Annualized rate per dollar invested today</div>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+            except Exception:
+                # Silently fail if there's an error calculating
+                pass
+
         with c2:
             st.markdown(
                 f"""
@@ -946,6 +1023,7 @@ def main_app():
     #     st.markdown("</div>", unsafe_allow_html=True)
     # empty right column is just spacing to keep 1/3 width
     with col_left:
+        st.caption("Next investment window: May 2026")
         st.markdown(
             '<div class="scenario-card"><div class="scenario-title">Sell / exit date</div>',
             unsafe_allow_html=True,
@@ -957,7 +1035,7 @@ def main_app():
         # Hide the first date unless this user is allowlisted
         user_email = st.session_state.get("user", "")
         if not can_see_earliest_sell_date(user_email) and len(base_options) > 1:
-            date_options = base_options[1:]   # drop the earliest item
+            date_options = base_options[1:]  # drop the earliest item
         else:
             date_options = base_options
 
@@ -975,12 +1053,7 @@ def main_app():
         )
         st.markdown("</div>", unsafe_allow_html=True)
 
-
     sell_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
-
-    # Top containers keep layout order (Performance, then Overview)
-    perf_box = st.container()
-    overview_box = st.container()
 
     # Build series
     try:
@@ -998,8 +1071,14 @@ def main_app():
     for d in INVESTMENT_DATES:
         contrib_df.loc[pd.Timestamp(d), "Total plan"] = ALDAR_PLAN.get(d, 0.0)
 
-    # Editor
-    contrib_df = section_contributions(selected_participant, contrib_df)
+    # Create containers for layout order (Performance, Contributions, Overview)
+    perf_box = st.container()
+    contrib_box = st.container()
+    overview_box = st.container()
+
+    # Editor - render into contrib_box
+    with contrib_box:
+        contrib_df = section_contributions(selected_participant, contrib_df)
 
     # Invested balances
     end_for_invested = max(sell_date, price_series.index.max().date())
@@ -1018,7 +1097,14 @@ def main_app():
         daily_invested,
         contrib_df,
     )
-    render_overview(overview_box, sell_date, price_today_val, price_sell_val)
+    render_overview(
+        overview_box,
+        sell_date,
+        price_today_val,
+        price_sell_val,
+        daily_invested,
+        price_series,
+    )
 
     # Charts
     section_charts(daily_invested, price_series, selected_participant, is_admin)

@@ -257,3 +257,57 @@ def exit_gains_at_date(
         "New investor": g["New investor"],
         "Other investors": g["Other investors"],
     }, rate_annual
+
+
+def get_daily_gain_per_dollar(
+    when: date,
+    acq_date: date,
+    acq_price: float,
+    price_series: pd.Series,
+    daily_invested: pd.DataFrame,
+) -> float:
+    """
+    Calculate the daily appreciation gain per dollar at a given time.
+
+    This changes over time because:
+    - The total appreciation is divided by the total days from acquisition
+    - That daily amount is then divided by the total investment at that time
+
+    Args:
+        when: The date to calculate the gain for
+        acq_date: Acquisition date of the property
+        acq_price: Acquisition price
+        price_series: Series of property prices over time
+        daily_invested: DataFrame with total invested amounts per day
+
+    Returns:
+        The daily gain per dollar invested at that time
+    """
+    if when <= acq_date:
+        return 0.0
+
+    # Get the current price
+    ps = _ensure_on_series(price_series.copy().sort_index(), when, acq_date)
+    price_t = float(ps.loc[pd.Timestamp(when)])
+    total_appreciation = max(price_t - acq_price, 0.0)
+
+    # Calculate total days from acquisition
+    total_days = max((when - acq_date).days, 1)
+
+    # Daily appreciation for the entire project
+    daily_app = total_appreciation / total_days
+
+    # Get total invested at this date
+    start = acq_date + timedelta(days=1)
+    idx = make_daily_index(start, when)
+    inv = daily_invested.reindex(idx).ffill().fillna(0.0)
+    total_invested_at_time = inv["Total"].iloc[-1]
+
+    # If there's no investment yet, return 0
+    if total_invested_at_time <= 0:
+        return 0.0
+
+    # Daily gain per dollar = total daily appreciation / total invested
+    daily_gain_per_dollar = daily_app / total_invested_at_time
+
+    return daily_gain_per_dollar
