@@ -268,21 +268,21 @@ def get_daily_gain_per_dollar(
 ) -> float:
     """
     Calculate the daily appreciation gain per dollar at a given time.
-    
+
     This changes over time because:
     - The total appreciation is divided by the total days from acquisition
     - That daily amount is then divided by the total investment at that time
-    
+
     Args:
         when: The date to calculate the gain for
         acq_date: Acquisition date of the property
         acq_price: Acquisition price
         price_series: Series of property prices over time
         daily_invested: DataFrame with total invested amounts per day
-        
+
     Returns:
         The daily gain per dollar invested at that time
-    """ 
+    """
     if when <= acq_date:
         return 0.0
 

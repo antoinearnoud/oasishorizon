@@ -213,7 +213,7 @@ def inject_css():
 
 /* Scenario selector card */
 .scenario-card { background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:12px 16px; margin-bottom:8px; }
-.scenario-title { font-size:13px; font-weight:800; color:#374151; margin-bottom:8px; }
+.scenario-title { font-size:14px; font-weight:800; color:#374151; margin-bottom:8px; }
 
 /* Login right image alignment */
 .login-hero {
@@ -282,6 +282,26 @@ def fmt_currency(amount_aed: float) -> str:
     val = amount_aed * CURRENCY_RATES[cur]
     symbol = "€" if cur == EUR else "$" if cur == USD else "AED "
     return f"{symbol}{val:,.0f}"
+
+
+def fmt_aed(amount_aed: float) -> str:
+    """Format amount in AED with commas"""
+    return f"AED {amount_aed:,.0f}"
+
+
+def fmt_aed_compact(amount_aed: float) -> str:
+    """Format amount in AED in compact form (e.g., 1.2M, 500K)"""
+    if amount_aed >= 1_000_000:
+        return f"AED {amount_aed/1_000_000:.1f}M"
+    elif amount_aed >= 1_000:
+        return f"AED {amount_aed/1_000:.0f}K"
+    else:
+        return f"AED {amount_aed:.0f}"
+
+
+def fmt_date(d: date) -> str:
+    """Format date as 'DD MMM YYYY'"""
+    return d.strftime("%d %b %Y")
 
 
 def can_see_earliest_sell_date(email: str) -> bool:
@@ -855,12 +875,33 @@ def render_performance(
         user_email = st.session_state.get("user", "")
         show_gains = can_see_gains(user_email)
 
-        # First column: Today's gains (combined in one card)
+        # Build the base list for date selector
+        base_options = [d.strftime("%Y-%m-%d") for d in INVESTMENT_DATES[3:]]
+
+        # Hide the first date unless this user is allowlisted
+        if not can_see_earliest_sell_date(user_email) and len(base_options) > 1:
+            date_options = base_options[1:]  # drop the earliest item
+        else:
+            date_options = base_options
+
+        # If the previously selected value is no longer available, reset it
+        prev = st.session_state.get("scenario_main")
+        if prev and prev not in date_options:
+            st.session_state.pop("scenario_main")
+
+        # Build gains cards with exact alignment
         c1, c2 = st.columns([1, 1])
+
+        # Column 1: Gains Today card (with spacer)
         with c1:
-            if show_gains:
-                st.markdown(
-                    f"""
+            # Spacer to match Exit date selector height (label + selectbox + spacing)
+            st.markdown(
+                '<div style="height: 60px; margin-bottom: 8px;"></div>',
+                unsafe_allow_html=True,
+            )
+
+            gains_today_card = (
+                f"""
 <div class="stat-card lg">
   <div class="card-head">Gains Today</div>
   <hr>
@@ -873,35 +914,55 @@ def render_performance(
     <div class="card-value" style="font-size: 1.2rem; color: rgba(49,51,63,0.8);">{fmt_currency(aed_today_guarantee)}</div>
   </div>
 </div>
-""",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    f"""
+"""
+                if show_gains
+                else f"""
 <div class="stat-card lg">
   <div class="card-head">Gains Today</div>
   <hr>
   <div class="card-value" style="font-size: 1.4rem; color: rgba(49,51,63,0.6);">No investment yet</div>
 </div>
-""",
+"""
+            )
+
+            st.markdown(gains_today_card, unsafe_allow_html=True)
+
+        # Column 2: Exit date selector + Gains at card
+        with c2:
+            # Exit date selector row
+            col_label, col_select, unused_col = st.columns([2, 3, 3])
+
+            with col_label:
+                st.markdown(
+                    '<div style="padding-top:8px; font-size:14px; font-weight:800; color:#374151;">Exit date</div>',
                     unsafe_allow_html=True,
                 )
 
-        # Second column: Future gains (combined in one card)
-        with c2:
+            with col_select:
+                selected_date_str = st.selectbox(
+                    "",
+                    options=date_options,
+                    index=0,
+                    label_visibility="collapsed",
+                    key="scenario_main",
+                )
+
+            # Convert selected date string to date object for display
+            display_sell_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+
+            # Gains at card
             st.markdown(
                 f"""
-<div class="stat-card lg">
-  <div class="card-head">Gains at {sell_date.isoformat()}</div>
+<div class="stat-card lg" style="margin-top: 8px; padding: 20px 18px;">
+  <div class="card-head">Gains at {display_sell_date.isoformat()}</div>
   <hr>
-  <div style="margin-bottom: 12px;">
-    <div style="font-size: 0.9rem; color: rgba(49,51,63,0.7); margin-bottom: 4px;">Estimated (sale)</div>
-    <div class="card-value" style="font-size: 1.4rem; margin-bottom: 8px;">{fmt_currency(aed_sell)}</div>
+  <div style="margin-bottom: 16px;">
+    <div style="font-size: 0.9rem; color: rgba(49,51,63,0.7); margin-bottom: 6px;">Estimated (sale)</div>
+    <div class="card-value" style="font-size: 1.5rem; margin-bottom: 10px;">{fmt_currency(aed_sell)}</div>
   </div>
   <div>
-    <div style="font-size: 0.9rem; color: rgba(49,51,63,0.7); margin-bottom: 4px;">Guaranteed (exit @{rate}% p.a.)</div>
-    <div class="card-value" style="font-size: 1.2rem; color: rgba(49,51,63,0.8);">{fmt_currency(aed_exit)}</div>
+    <div style="font-size: 0.9rem; color: rgba(49,51,63,0.7); margin-bottom: 6px;">Guaranteed (exit @{rate}% p.a.)</div>
+    <div class="card-value" style="font-size: 1.3rem; color: rgba(49,51,63,0.8);">{fmt_currency(aed_exit)}</div>
   </div>
 </div>
 """,
@@ -1004,57 +1065,6 @@ def main_app():
 
     # ---- Scenario selector (1/3 width) ----
     # Place selector in the first column of a 1:2 split so it occupies ~33% width.
-    col_left, col_right = st.columns([1, 3])
-    # with col_left:
-    #     st.markdown(
-    #         '<div class="scenario-card"><div class="scenario-title">Sell / exit date</div>',
-    #         unsafe_allow_html=True,
-    #     )
-    #     date_options = [
-    #         d.strftime("%Y-%m-%d") for d in INVESTMENT_DATES[3:]
-    #     ]  # start at 2026-05-30
-    #     selected_date_str = st.selectbox(
-    #         "",
-    #         options=date_options,
-    #         index=0,
-    #         label_visibility="collapsed",
-    #         key="scenario_main",
-    #     )
-    #     st.markdown("</div>", unsafe_allow_html=True)
-    # empty right column is just spacing to keep 1/3 width
-    with col_left:
-        st.caption("Next investment window: May 2026")
-        st.markdown(
-            '<div class="scenario-card"><div class="scenario-title">Sell / exit date</div>',
-            unsafe_allow_html=True,
-        )
-
-        # Build the base list you currently expose (starting at index 3 = 2026-05-30)
-        base_options = [d.strftime("%Y-%m-%d") for d in INVESTMENT_DATES[3:]]
-
-        # Hide the first date unless this user is allowlisted
-        user_email = st.session_state.get("user", "")
-        if not can_see_earliest_sell_date(user_email) and len(base_options) > 1:
-            date_options = base_options[1:]  # drop the earliest item
-        else:
-            date_options = base_options
-
-        # If the previously selected value is no longer available, reset it
-        prev = st.session_state.get("scenario_main")
-        if prev and prev not in date_options:
-            st.session_state.pop("scenario_main")
-
-        selected_date_str = st.selectbox(
-            "",
-            options=date_options,
-            index=0,
-            label_visibility="collapsed",
-            key="scenario_main",
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    sell_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
-
     # Build series
     try:
         price_series = linear_price_series(
@@ -1063,6 +1073,111 @@ def main_app():
     except Exception as e:
         show_fatal("Failed to build price series.", e)
         return
+
+    # Calculate current appreciation for chapeau
+    ps_today = price_series.sort_index()
+    if datetime.now().date() not in ps_today.index.date:
+        ps_today = (
+            ps_today.reindex(
+                ps_today.index.union([pd.Timestamp(datetime.now().date())])
+            )
+            .interpolate(method="time")
+            .ffill()
+            .bfill()
+        )
+    current_price = float(ps_today.loc[pd.Timestamp(datetime.now().date())])
+    appreciation_blurb = current_price - ACQ_PRICE
+
+    # Build target HTML
+    target_html = f"<div>Target sale: <strong>{fmt_aed(TARGET_PRICE)}</strong> by <strong>{fmt_date(TARGET_DATE)}</strong></div>"
+
+    # Chapeau - Investment Overview
+    st.markdown(
+        f"""
+<div style="border:1px solid rgba(194,178,128,0.3); border-radius:12px; padding:18px 20px; background:linear-gradient(135deg, #faf8f3 0%, #f5f2eb 100%); line-height:1.65; box-shadow:0 2px 4px rgba(0,0,0,0.02);">
+  <div style="margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid rgba(194,178,128,0.2);">
+    <strong style="font-size:1.05em; color:#2c2416;">Investment Overview</strong>
+  </div>
+  <ul style="margin:0; padding-left:20px; list-style-type:disc;">
+    <li style="margin-bottom:10px;"><strong>Prime Abu Dhabi property</strong> that has already appreciated by <strong style="color:#0F766E;">{fmt_aed_compact(appreciation_blurb)}</strong> since acquisition</li>
+    <li style="margin-bottom:10px;">Capital returned first, investors receive a <strong>15% annualized preferred return</strong>, and profits above that are shared fairly on a <strong>daily pro-rata basis</strong></li>
+    <li style="margin-bottom:10px;"><strong>Flexible liquidity:</strong> exit every 8 months at <strong>15% p.a.</strong> (via contractual buy-out), or <strong>automatically at 20% p.a.</strong> if property not sold by <strong>30 Sep 2028</strong></li>
+  </ul>
+  <div style="margin-top:14px; padding-top:12px; border-top:1px solid rgba(194,178,128,0.2); font-size:0.92em; color:#5a5444;">
+    <strong>Purchase:</strong> {fmt_aed(ACQ_PRICE)} on {fmt_date(ACQ_DATE)} &nbsp;•&nbsp; <strong>Target sale:</strong> {fmt_aed(TARGET_PRICE)} by {fmt_date(TARGET_DATE)}
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("")  # Add some spacing
+
+    # col_left, col_mid, col_right = st.columns([1, 1, 3])
+    # # with col_left:
+    # #     st.markdown(
+    # #         '<div class="scenario-card"><div class="scenario-title">Sell / exit date</div>',
+    # #         unsafe_allow_html=True,
+    # #     )
+    # #     date_options = [
+    # #         d.strftime("%Y-%m-%d") for d in INVESTMENT_DATES[3:]
+    # #     ]  # start at 2026-05-30
+    # #     selected_date_str = st.selectbox(
+    # #         "",
+    # #         options=date_options,
+    # #         index=0,
+    # #         label_visibility="collapsed",
+    # #         key="scenario_main",
+    # #     )
+    # #     st.markdown("</div>", unsafe_allow_html=True)
+    # # empty right column is just spacing to keep 1/3 width
+    # with col_left:
+    #     st.markdown(
+    #         '<div class="scenario-card"><div class="scenario-title">Exit date</div>',
+    #         unsafe_allow_html=True,
+    #     )
+
+    # with col_mid:
+    #     # Build the base list you currently expose (starting at index 3 = 2026-05-30)
+    #     base_options = [d.strftime("%Y-%m-%d") for d in INVESTMENT_DATES[3:]]
+
+    #     # Hide the first date unless this user is allowlisted
+    #     user_email = st.session_state.get("user", "")
+    #     if not can_see_earliest_sell_date(user_email) and len(base_options) > 1:
+    #         date_options = base_options[1:]  # drop the earliest item
+    #     else:
+    #         date_options = base_options
+
+    #     # If the previously selected value is no longer available, reset it
+    #     prev = st.session_state.get("scenario_main")
+    #     if prev and prev not in date_options:
+    #         st.session_state.pop("scenario_main")
+
+    #     selected_date_str = st.selectbox(
+    #         "",
+    #         options=date_options,
+    #         index=0,
+    #         label_visibility="collapsed",
+    #         key="scenario_main_",
+    #     )
+    #     st.markdown("</div>", unsafe_allow_html=True)
+
+    # sell_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+
+    # Get sell_date from session state (set by the selector in render_performance)
+    # Use a default if not set yet
+    if "scenario_main" in st.session_state and st.session_state["scenario_main"]:
+        sell_date = datetime.strptime(
+            st.session_state["scenario_main"], "%Y-%m-%d"
+        ).date()
+    else:
+        # Default to first available date
+        user_email = st.session_state.get("user", "")
+        base_options = [d for d in INVESTMENT_DATES[3:]]
+        if not can_see_earliest_sell_date(user_email) and len(base_options) > 1:
+            sell_date = base_options[1]
+        else:
+            sell_date = base_options[0]
 
     # Base contributions
     contrib_df = base_contrib_df(INVESTMENT_DATES)
