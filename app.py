@@ -261,20 +261,21 @@ def sidebar_nav():
     st.sidebar.markdown(
         '<div class="sb-nav-title">INVESTOR PORTAL</div>', unsafe_allow_html=True
     )
-    st.sidebar.markdown(
-        """
-<div class="sb-wrap">
-  <div class="sb-rail"></div>
-  <div class="sb-nav">
-    <div class="sb-item active">
-      <span class="ic">🏠</span>
-      <span>Home</span>
-    </div>
-  </div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
+
+    # Initialize page selection
+    if "current_page" not in st.session_state:
+        st.session_state.current_page = "Home"
+
+    # Create clickable navigation
+    if st.sidebar.button("🏠  Home", use_container_width=True, key="nav_home"):
+        st.session_state.current_page = "Home"
+
+    if st.sidebar.button(
+        "📋  Project Details", use_container_width=True, key="nav_details"
+    ):
+        st.session_state.current_page = "Project Details"
+
+    return st.session_state.current_page
 
 
 def fmt_currency(amount_aed: float) -> str:
@@ -302,6 +303,383 @@ def fmt_aed_compact(amount_aed: float) -> str:
 def fmt_date(d: date) -> str:
     """Format date as 'DD MMM YYYY'"""
     return d.strftime("%d %b %Y")
+
+
+def render_project_details_page():
+    """Render the Project Details page with comprehensive investment information"""
+    st.title("The Arthouse Project")
+    st.markdown("### Exclusive Real Estate Investment in Saadiyat Island, Abu Dhabi")
+
+    st.markdown(
+        """
+    <div style="background:#e0f2f1; border-left:4px solid #0F766E; padding:12px 16px; border-radius:6px; margin-bottom:20px;">
+        <strong>Premium off-plan unit by Aldar Properties</strong> — Abu Dhabi's most reputable developer — 
+        with direct views of Guggenheim Abu Dhabi and the Arabian Gulf.
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # Investment Summary
+    st.markdown("---")
+    st.subheader("📊 Investment Summary")
+    with st.container(border=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(
+                "Targeted IRR",
+                "~25% p.a.",
+                help="Annualized, based on projected appreciation and sale timing",
+            )
+        with col2:
+            current_appreciation_pct = ((12_810_000 - ACQ_PRICE) / ACQ_PRICE) * 100
+            st.metric(
+                "Current Appreciation",
+                f"{current_appreciation_pct:.1f}%",
+                help="As of today",
+            )
+        with col3:
+            st.metric("ROI to Date", "~73%", help="Based on initial capital invested")
+
+    # About The Arthouse
+    st.markdown("---")
+    st.subheader("🏛️ About The Arthouse")
+    with st.container(border=True):
+        st.markdown(
+            """
+        **The Arthouse** is an exclusive residential community by Aldar Properties that draws inspiration from private members' clubs 
+        around the world, purposely designed to provide residents with an inspirational environment every day.
+        
+        Aptly located in the **heart of Saadiyat Cultural District** – a global destination created to nurture intercultural 
+        exchanges in Abu Dhabi – The Arthouse overlooks the Guggenheim Abu Dhabi, with stunning views across the 
+        Arabian Gulf's glistening turquoise waters.
+        
+        **Key Features:**
+        - Exclusive residential community inspired by private members' clubs
+        - Located in Saadiyat Cultural District with direct views of iconic cultural attractions
+        - Overlooking Guggenheim Abu Dhabi (opening scheduled Dec 2025)
+        - Stunning views of the Arabian Gulf
+        - Premium finishes and world-class amenities
+        """
+        )
+
+    # Location Details - Combined Abu Dhabi & Saadiyat Island
+    st.markdown("---")
+    st.subheader("📍 Abu Dhabi & Saadiyat Island - Prime Investment Location")
+    with st.container(border=True):
+        st.markdown(
+            """
+        **Why Abu Dhabi Real Estate?**
+        
+        Abu Dhabi presents exceptional opportunities for real estate investment:
+        
+        - **Robust Economic Growth:** Abu Dhabi's diversification into technology, tourism, and finance fuels demand for high-end real estate
+        - **Government Incentives:** Long-term residency programs like the Golden Visa attract international expatriates
+        - **Strategic Infrastructure:** Ongoing development of transportation, cultural landmarks, and leisure destinations
+        - **Limited Premium Supply:** Rising demand with limited luxury property availability drives continued appreciation
+        
+        ---
+        
+        **Saadiyat Island - Abu Dhabi's Crown Jewel**
+        
+        Saadiyat Island is Abu Dhabi's premier luxury destination, combining world-class culture, pristine beaches, 
+        and elite residential living.
+        
+        **Cultural Hub:**
+        - Home to the Louvre Abu Dhabi
+        - Guggenheim Museum (opening scheduled December 2025)
+        - Zayed National Museum (future site)
+        
+        **Exclusive Development:**
+        - Aldar Properties holds **exclusive rights** to develop on the island
+        - Ensures consistent luxury standard across all developments
+        - Limited supply driving strong appreciation
+        
+        **Premium Amenities:**
+        - Pristine private beaches
+        - Championship golf courses
+        - 5-star hotels and fine dining
+        - International schools and healthcare facilities
+        
+        **Proven Appreciation:** Limited land supply and high global demand have driven significant property 
+        value growth over the past decade.
+        """
+        )
+
+    # About Aldar Properties
+    st.markdown("---")
+    st.subheader("🏗️ About Aldar Properties")
+    with st.container(border=True):
+        st.markdown(
+            """
+        **Aldar Properties** is renowned for delivering iconic developments that shape Abu Dhabi's urban landscape, 
+        including Yas Island and Saadiyat Island. Aldar sets benchmarks in premium residential and commercial real 
+        estate, consistently offering high-quality developments that attract significant investor interest.
+        
+        **Why Aldar?**
+        
+        ✅ **Premium Quality:** Synonymous with luxury, modern design, and superior quality. Commitment to excellence 
+        in construction and on-time delivery reduces investor risk.
+        
+        ✅ **Government Backing:** As a semi-government entity, Aldar benefits from strong support from the 
+        Abu Dhabi government, minimizing risks and enhancing project stability.
+        
+        ✅ **Prime Locations:** Developments in the most sought-after areas of Abu Dhabi, with **exclusive allocation** 
+        of Saadiyat Island to Aldar.
+        
+        ✅ **Proven Track Record:** Completed projects have shown remarkable value appreciation, often doubling 
+        in price from launch to handover.
+        
+        ✅ **Future Pipeline:** As exclusive developer on Saadiyat Island, Aldar has numerous luxury projects planned 
+        over the next decade.
+        """
+        )
+
+    # Our Investment
+    st.markdown("---")
+    st.subheader("💰 Our Investment")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(
+            f"""
+        <div class="stat-card">
+          <div class="card-head">Purchase Price</div>
+          <hr>
+          <div class="card-value">{fmt_aed(ACQ_PRICE)}</div>
+          <div class="card-sub">Acquired {fmt_date(ACQ_DATE)}</div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    with col2:
+        down_payment = 2_200_000
+        st.markdown(
+            f"""
+        <div class="stat-card">
+          <div class="card-head">Down Payment</div>
+          <hr>
+          <div class="card-value">{fmt_aed(down_payment)}</div>
+          <div class="card-sub">{(down_payment/ACQ_PRICE)*100:.1f}% of total</div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    with col3:
+        appreciation = TARGET_PRICE - ACQ_PRICE
+        roi = (appreciation / ACQ_PRICE) * 100
+        st.markdown(
+            f"""
+        <div class="stat-card">
+          <div class="card-head">Target Appreciation</div>
+          <hr>
+          <div class="card-value">{roi:.1f}%</div>
+          <div class="card-sub">{fmt_aed(appreciation)}</div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("")
+    with st.container(border=True):
+        st.markdown(
+            """
+        **Investment Strategy:**
+        - Off-plan purchase at early-stage pricing
+        - Payment in construction-linked installments to optimize ROI
+        - Sale at or before handover to capture maximum appreciation
+        - Leverage effect from paying by tranches during development
+        """
+        )
+
+    # Investment Goal
+    st.markdown("---")
+    st.subheader("🎯 Investment Goal")
+    with st.container(border=True):
+        st.markdown(
+            """
+        Our objective is to generate **over 25% annual returns** through:
+        
+        1. **Early Entry:** Securing units before public release at below-market prices
+        2. **Capital Appreciation:** Leveraging value growth from launch to handover
+        3. **Efficient Capital Use:** Payment in tranches during construction to optimize ROI
+        4. **Limited Supply Advantage:** Very limited supply of similar properties in Saadiyat Island
+        5. **High Demand at Handover:** Strong demand for luxurious, ready-to-move units
+        """
+        )
+
+    # Payment Plan
+    st.markdown("---")
+    st.subheader("📅 Construction-Linked Payment Schedule")
+    with st.container(border=True):
+        st.markdown("**Aldar's Payment Plan - Linked to Construction Progress**")
+        st.caption(
+            "Payment by tranches during development allows for leverage effect and capital efficiency"
+        )
+
+        payment_data = []
+        cumulative = 0
+        for payment_date, amount in sorted(ALDAR_PLAN.items()):
+            cumulative += amount
+            payment_data.append(
+                {
+                    "Date": fmt_date(payment_date),
+                    "Amount (AED)": f"{amount:,.0f}",
+                    "% of Total": f"{(amount/ACQ_PRICE)*100:.1f}%",
+                    "Cumulative (AED)": f"{cumulative:,.0f}",
+                }
+            )
+
+        df_payments = pd.DataFrame(payment_data)
+        st.dataframe(df_payments, use_container_width=True, hide_index=True)
+
+        st.caption(
+            f"**Total Investment:** {fmt_aed(ACQ_PRICE)} • **Down Payment:** AED 2,200,000 (18.5%) • **Installments:** {len(ALDAR_PLAN)}"
+        )
+
+    # Distribution of Gains
+    st.markdown("---")
+    st.subheader("📜 Distribution of Gains")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown(
+            """
+        <div class="stat-card">
+          <div class="card-head">Returns Structure</div>
+          <hr>
+          <div style="line-height: 1.8;">
+            <strong>Capital Priority:</strong> Investors' capital returned first<br>
+            <strong>Preferred Return:</strong> 15% per annum guaranteed<br>
+            <strong>Profit Sharing:</strong> Daily pro-rata basis above preferred return<br>
+            <strong>Individual Calculation:</strong> Based on capital contribution and holding period
+          </div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    with col2:
+        st.markdown(
+            """
+        <div class="stat-card">
+          <div class="card-head">Exit Options & Key Dates</div>
+          <hr>
+          <div style="line-height: 1.8;">
+            <strong>Acquisition:</strong> 30 September 2024<br>
+            <strong>Next Investment Window:</strong> May 2026<br>
+            <strong>Expected Sale:</strong> March 2026 or at handover<br>
+            <strong>Exit Option:</strong> Every 8 months at 15% p.a.<br>
+            <strong>Auto Exit:</strong> 20% p.a. if not sold by 30 Sep 2028
+          </div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("")
+    with st.container(border=True):
+        st.info(
+            """
+        **Exit Flexibility:** If the unit is not sold by the expected date, participants may choose to exit 
+        with a bonus calculated at an annualized rate (15-20%), subject to terms set out in a separate agreement.
+        """
+        )
+
+    # Appreciation Factors
+    st.markdown("---")
+    st.subheader("📈 Why This Investment Matters Now")
+    with st.container(border=True):
+        st.markdown(
+            """
+        **Strong Demand:** Limited luxury inventory on Saadiyat Island ensures competitive resale conditions.
+        
+        **Cultural & Lifestyle Appeal:** Global appeal to high-net-worth buyers and expatriates seeking 
+        proximity to world-class museums and amenities.
+        
+        **Secure Developer:** Aldar's government backing and proven track record minimize delivery risk.
+        
+        **Limited Supply:** Very limited supply of similar properties with direct views of iconic cultural attractions.
+        
+        **Handover Premium:** High demand for luxurious, ready-to-move units creates significant appreciation 
+        at handover.
+        
+        **Payment Structure Advantage:** Construction-linked payments allow for leverage effect, maximizing 
+        capital efficiency and ROI.
+        """
+        )
+
+    # Property Features
+    st.markdown("---")
+    st.subheader("🏡 Unit Characteristics")
+    with st.container(border=True):
+        feat_col1, feat_col2, feat_col3 = st.columns(3)
+
+        with feat_col1:
+            st.markdown("**Developer**")
+            st.info("Aldar Properties")
+            st.markdown("**Project**")
+            st.info("The Arthouse")
+
+        with feat_col2:
+            st.markdown("**Location**")
+            st.info("Saadiyat Cultural District")
+            st.markdown("**Type**")
+            st.info("Premium Residential Unit")
+
+        with feat_col3:
+            st.markdown("**Status**")
+            st.info("Off-Plan / Under Development")
+            st.markdown("**Expected Handover**")
+            st.info("2028")
+
+    # Legal Notice & Risk Disclosure
+    st.markdown("---")
+    st.subheader("⚠️ Legal Notice & Risk Disclosure")
+    with st.expander("Important Information - Please Read", expanded=False):
+        st.warning(
+            """
+        **Legal Notice:**
+        
+        This document is intended for informational purposes only and does not constitute an offer to the public or 
+        a solicitation to invest. Participation is by invitation only and subject to the terms of a separate agreement 
+        between the parties. Past performance is not indicative of future results. All investments carry risk, 
+        including the risk of loss.
+        
+        **Investment Risks:**
+        
+        - Real estate investments carry market risk and property values may fluctuate
+        - Returns (including the targeted 25% IRR) are projections based on assumptions and not guaranteed outcomes
+        - Actual returns depend on final sale price and holding duration
+        - Property completion delays may affect expected timelines
+        - Liquidity may be limited between designated exit windows
+        - Currency fluctuations may affect international investors
+        - Market conditions in Abu Dhabi real estate may change
+        - Developer risk, though mitigated by Aldar's government backing
+        
+        **Recommendation:** Investors should conduct their own due diligence and seek independent legal and 
+        financial advice before making any investment decision.
+        """
+        )
+
+    # Contact & Footer
+    st.markdown("---")
+    st.subheader("📞 Contact Information")
+    with st.container(border=True):
+        st.markdown(
+            """
+        For more information, questions, or to schedule a virtual unit tour:
+        
+        **Phone:** +971 54-590-6240  
+        **Email:** support@oasishorizon.com
+        
+        We're happy to provide additional documentation, arrange virtual viewings, or answer any questions 
+        about the investment structure.
+        """
+        )
 
 
 def can_see_earliest_sell_date(email: str) -> bool:
@@ -1051,8 +1429,14 @@ def render_overview(
 def main_app():
     inject_css()
     appbar()
-    sidebar_nav()
+    current_page = sidebar_nav()
 
+    # Route to different pages
+    if current_page == "Project Details":
+        render_project_details_page()
+        return
+
+    # Default: Home page (dashboard)
     is_admin = st.session_state.get("role") == "Admin"
 
     # Admin can choose whose view to display
@@ -1096,15 +1480,15 @@ def main_app():
         f"""
 <div style="border:1px solid rgba(194,178,128,0.3); border-radius:12px; padding:18px 20px; background:linear-gradient(135deg, #faf8f3 0%, #f5f2eb 100%); line-height:1.65; box-shadow:0 2px 4px rgba(0,0,0,0.02);">
   <div style="margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid rgba(194,178,128,0.2);">
-    <strong style="font-size:1.05em; color:#2c2416;">Investment Overview</strong>
+    <strong style="font-size:1.05em; color:#2c2416;">Investment Overview - The Arthouse</strong>
   </div>
   <ul style="margin:0; padding-left:20px; list-style-type:disc;">
-    <li style="margin-bottom:10px;"><strong>Prime Abu Dhabi property</strong> that has already appreciated by <strong style="color:#0F766E;">{fmt_aed_compact(appreciation_blurb)}</strong> since acquisition</li>
+    <li style="margin-bottom:10px;"><strong>The Arthouse by Aldar Properties</strong> on Saadiyat Island has already appreciated by <strong style="color:#0F766E;">{fmt_aed_compact(appreciation_blurb)}</strong> since acquisition in September 2024</li>
     <li style="margin-bottom:10px;">Capital returned first, investors receive a <strong>15% annualized preferred return</strong>, and profits above that are shared fairly on a <strong>daily pro-rata basis</strong></li>
     <li style="margin-bottom:10px;"><strong>Flexible liquidity:</strong> exit every 8 months at <strong>15% p.a.</strong> (via contractual buy-out), or <strong>automatically at 20% p.a.</strong> if property not sold by <strong>30 Sep 2028</strong></li>
   </ul>
   <div style="margin-top:14px; padding-top:12px; border-top:1px solid rgba(194,178,128,0.2); font-size:0.92em; color:#5a5444;">
-    <strong>Purchase:</strong> {fmt_aed(ACQ_PRICE)} on {fmt_date(ACQ_DATE)} &nbsp;•&nbsp; <strong>Target sale:</strong> {fmt_aed(TARGET_PRICE)} by {fmt_date(TARGET_DATE)}
+    <strong>Purchase:</strong> {fmt_aed(ACQ_PRICE)} on {fmt_date(ACQ_DATE)} &nbsp;•&nbsp; <strong>Target sale:</strong> {fmt_aed(TARGET_PRICE)} by {fmt_date(TARGET_DATE)} &nbsp;•&nbsp; <strong>Targeted IRR:</strong> ~25% p.a.
   </div>
 </div>
 """,
