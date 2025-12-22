@@ -300,6 +300,19 @@ def fmt_aed_compact(amount_aed: float) -> str:
         return f"AED {amount_aed:.0f}"
 
 
+def fmt_currency_compact(amount_aed: float) -> str:
+    """Format amount in selected currency in compact form (e.g., €1.2M, $500K)"""
+    cur = st.session_state.get("currency", EUR)
+    val = amount_aed * CURRENCY_RATES[cur]
+    symbol = "€" if cur == EUR else "$" if cur == USD else "AED "
+    if val >= 1_000_000:
+        return f"{symbol}{val/1_000_000:.1f}M"
+    elif val >= 1_000:
+        return f"{symbol}{val/1_000:.0f}K"
+    else:
+        return f"{symbol}{val:.0f}"
+
+
 def fmt_date(d: date) -> str:
     """Format date as 'DD MMM YYYY'"""
     return d.strftime("%d %b %Y")
@@ -1483,12 +1496,12 @@ def main_app():
     <strong style="font-size:1.05em; color:#2c2416;">Investment Overview - The Arthouse</strong>
   </div>
   <ul style="margin:0; padding-left:20px; list-style-type:disc;">
-    <li style="margin-bottom:10px;"><strong>The Arthouse by Aldar Properties</strong> on Saadiyat Island has already appreciated by <strong style="color:#0F766E;">{fmt_aed_compact(appreciation_blurb)}</strong> since acquisition in September 2024</li>
+    <li style="margin-bottom:10px;"><strong>The Arthouse by Aldar Properties</strong> on Saadiyat Island has already appreciated by <strong style="color:#0F766E;">{fmt_currency_compact(appreciation_blurb)}</strong> since acquisition in September 2024</li>
     <li style="margin-bottom:10px;">Capital returned first, investors receive a <strong>15% annualized preferred return</strong>, and profits above that are shared fairly on a <strong>daily pro-rata basis</strong></li>
     <li style="margin-bottom:10px;"><strong>Flexible liquidity:</strong> exit every 8 months at <strong>15% p.a.</strong> (via contractual buy-out), or <strong>automatically at 20% p.a.</strong> if property not sold by <strong>30 Sep 2028</strong></li>
   </ul>
   <div style="margin-top:14px; padding-top:12px; border-top:1px solid rgba(194,178,128,0.2); font-size:0.92em; color:#5a5444;">
-    <strong>Purchase:</strong> {fmt_aed(ACQ_PRICE)} on {fmt_date(ACQ_DATE)} &nbsp;•&nbsp; <strong>Target sale:</strong> {fmt_aed(TARGET_PRICE)} by {fmt_date(TARGET_DATE)} &nbsp;•&nbsp; <strong>Targeted IRR:</strong> ~25% p.a.
+    <strong>Purchase:</strong> {fmt_currency_compact(ACQ_PRICE)} on {fmt_date(ACQ_DATE)} &nbsp;•&nbsp; <strong>Target sale:</strong> {fmt_currency_compact(TARGET_PRICE)} by {fmt_date(TARGET_DATE)} &nbsp;•&nbsp; <strong>Targeted IRR:</strong> ~25% p.a.
   </div>
 </div>
 """,
